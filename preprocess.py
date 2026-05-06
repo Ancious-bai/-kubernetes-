@@ -255,15 +255,22 @@ def generate_yaml(data_root: Path):
     with open(output_path, "w", encoding="utf-8") as f:
         yaml.dump(yaml_data, f, allow_unicode=True, default_flow_style=False)
 
-def generate_k8s_job_yaml(data_name: str, job_type: str, output_dir: str = "k8s_jobs"):
+def generate_k8s_job_yaml(data_name: str, job_type: str, output_dir: str = "k8s_jobs", epochs: int = 2, imgsz: int = 640):
     """
     生成 Kubernetes Job YAML 配置文件
 
     :param data_name: 数据集名称（如 data1, data2）
     :param job_type: 任务类型（train 或 test）
     :param output_dir: 输出目录
+    :param epochs: 训练轮数（仅train类型有效）
+    :param imgsz: 图像尺寸
     """
-    # 定义 Job 配置
+    command = ["python3", f"{job_type}_yolo.py", "--site", f"{data_name}_processed"]
+    if job_type == "train":
+        command.extend(["--epochs", str(epochs), "--imgsz", str(imgsz)])
+    elif job_type == "test":
+        command.extend(["--imgsz", str(imgsz)])
+
     job_config = {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -284,7 +291,7 @@ def generate_k8s_job_yaml(data_name: str, job_type: str, output_dir: str = "k8s_
                             "name": "yolo-container",
                             "image": "yolov8-project:latest",
                             "imagePullPolicy": "IfNotPresent",
-                            "command": ["python3", f"{job_type}_yolo.py", "--site", f"{data_name}_processed"],
+                            "command": command,
                             "env": [
                                 {
                                     "name": "PYTHONUNBUFFERED",
@@ -338,6 +345,8 @@ if __name__ == "__main__":
         required=True,
         help="要处理的数据集文件夹路径"
     )
+    parser.add_argument("--epochs", type=int, default=2, help="训练轮数")
+    parser.add_argument("--imgsz", type=int, default=640, help="图像尺寸")
     args = parser.parse_args()
     data_root = os.path.abspath(args.input_dir)
     if not os.path.exists(data_root):
@@ -370,8 +379,8 @@ if __name__ == "__main__":
 
     # 生成 Kubernetes Job YAML 文件
     output_dir = "k8s_jobs"
-    generate_k8s_job_yaml(data_name, "train", output_dir)
-    generate_k8s_job_yaml(data_name, "test", output_dir)
+    generate_k8s_job_yaml(data_name, "train", output_dir, epochs=args.epochs, imgsz=args.imgsz)
+    generate_k8s_job_yaml(data_name, "test", output_dir, imgsz=args.imgsz)
     print(f"\n🎉 所有配置文件已生成！使用命令部署:")
     print(f"  kubectl apply -f {project_root}/{output_dir}/{data_name}-train.yaml")
     print(f"  kubectl apply -f {project_root}/{output_dir}/{data_name}-test.yaml")

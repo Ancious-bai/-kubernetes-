@@ -1,0 +1,7 @@
+names:
+- gangue
+nc: 1
+path: ./data2_processed
+test: images/test
+train: images/train
+val: images/val

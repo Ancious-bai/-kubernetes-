@@ -26,9 +26,16 @@ public class TrainingSchedulerService {
     private static final String MAX_CONCURRENT_TASKS_KEY = "max.concurrent.tasks";
     private static final String MAX_CONCURRENT_TASKS_DEFAULT = "2";
     private static final String MAX_CONCURRENT_TASKS_DESC = "最大同时训练任务数";
+    private static final String DEFAULT_EPOCHS_KEY = "default.epochs";
+    private static final String DEFAULT_EPOCHS_VALUE = "2";
+    private static final String DEFAULT_EPOCHS_DESC = "默认训练轮数";
+    private static final String DEFAULT_IMGSZ_KEY = "default.imgsz";
+    private static final String DEFAULT_IMGSZ_VALUE = "640";
+    private static final String DEFAULT_IMGSZ_DESC = "默认图像尺寸";
 
-    // 最大同时训练数量，默认2个
     private volatile int maxConcurrentTasks = 2;
+    private volatile int defaultEpochs = 2;
+    private volatile int defaultImgsz = 640;
 
     // 优先级队列：数字越小优先级越高
     private final PriorityQueue<TrainingTask> taskQueue = new PriorityQueue<>(
@@ -50,6 +57,8 @@ public class TrainingSchedulerService {
     @PostConstruct
     public void init() {
         loadMaxConcurrentTasksFromDB();
+        loadDefaultEpochsFromDB();
+        loadDefaultImgszFromDB();
         schedulerExecutor.submit(this::processQueue);
     }
 
@@ -93,13 +102,70 @@ public class TrainingSchedulerService {
         return maxConcurrentTasks;
     }
 
-    public synchronized void addTask(String dataName) {
+    private void loadDefaultEpochsFromDB() {
+        SystemConfig config = systemConfigRepository.findByConfigKey(DEFAULT_EPOCHS_KEY)
+            .orElseGet(() -> {
+                SystemConfig defaultConfig = new SystemConfig(DEFAULT_EPOCHS_KEY, DEFAULT_EPOCHS_VALUE, DEFAULT_EPOCHS_DESC);
+                return systemConfigRepository.save(defaultConfig);
+            });
+        try {
+            this.defaultEpochs = Integer.parseInt(config.getConfigValue());
+            System.out.println("从数据库加载默认训练轮数: " + this.defaultEpochs);
+        } catch (NumberFormatException e) {
+            this.defaultEpochs = Integer.parseInt(DEFAULT_EPOCHS_VALUE);
+        }
+    }
+
+    public synchronized void setDefaultEpochs(int epochs) {
+        if (epochs >= 1 && epochs <= 1000) {
+            this.defaultEpochs = epochs;
+            SystemConfig config = systemConfigRepository.findByConfigKey(DEFAULT_EPOCHS_KEY)
+                .orElse(new SystemConfig(DEFAULT_EPOCHS_KEY, String.valueOf(epochs), DEFAULT_EPOCHS_DESC));
+            config.setConfigValue(String.valueOf(epochs));
+            systemConfigRepository.save(config);
+            System.out.println("默认训练轮数已保存到数据库: " + epochs);
+        }
+    }
+
+    public synchronized int getDefaultEpochs() {
+        return defaultEpochs;
+    }
+
+    private void loadDefaultImgszFromDB() {
+        SystemConfig config = systemConfigRepository.findByConfigKey(DEFAULT_IMGSZ_KEY)
+            .orElseGet(() -> {
+                SystemConfig defaultConfig = new SystemConfig(DEFAULT_IMGSZ_KEY, DEFAULT_IMGSZ_VALUE, DEFAULT_IMGSZ_DESC);
+                return systemConfigRepository.save(defaultConfig);
+            });
+        try {
+            this.defaultImgsz = Integer.parseInt(config.getConfigValue());
+            System.out.println("从数据库加载默认图像尺寸: " + this.defaultImgsz);
+        } catch (NumberFormatException e) {
+            this.defaultImgsz = Integer.parseInt(DEFAULT_IMGSZ_VALUE);
+        }
+    }
+
+    public synchronized void setDefaultImgsz(int imgsz) {
+        if (imgsz >= 32 && imgsz <= 1280) {
+            this.defaultImgsz = imgsz;
+            SystemConfig config = systemConfigRepository.findByConfigKey(DEFAULT_IMGSZ_KEY)
+                .orElse(new SystemConfig(DEFAULT_IMGSZ_KEY, String.valueOf(imgsz), DEFAULT_IMGSZ_DESC));
+            config.setConfigValue(String.valueOf(imgsz));
+            systemConfigRepository.save(config);
+            System.out.println("默认图像尺寸已保存到数据库: " + imgsz);
+        }
+    }
+
+    public synchronized int getDefaultImgsz() {
+        return defaultImgsz;
+    }
+
+    public synchronized void addTask(String dataName, Integer epochs, Integer imgsz) {
         Dataset dataset = datasetRepository.findByName(dataName).orElse(null);
         if (dataset == null) {
             throw new IllegalArgumentException("数据集不存在: " + dataName);
         }
 
-        // 检查是否已在队列中或正在运行
         for (TrainingTask task : taskQueue) {
             if (task.getDataName().equals(dataName)) {
                 throw new IllegalArgumentException("任务已在队列中: " + dataName);
@@ -111,18 +177,18 @@ public class TrainingSchedulerService {
             }
         }
 
-        // 创建任务并添加到队列
-        TrainingTask task = new TrainingTask(dataName, dataset.getPriority());
+        int taskEpochs = (epochs != null && epochs > 0) ? epochs : defaultEpochs;
+        int taskImgsz = (imgsz != null && imgsz > 0) ? imgsz : defaultImgsz;
+        TrainingTask task = new TrainingTask(dataName, dataset.getPriority(), taskEpochs, taskImgsz);
         taskQueue.add(task);
 
-        // 更新状态
         datasetRepository.findByName(dataName).ifPresent(d -> {
             d.setTrainStatus("QUEUED");
             datasetRepository.save(d);
         });
         taskStatusMap.put(dataName, "QUEUED");
 
-        System.out.println("任务已加入队列: " + dataName + ", 优先级: " + dataset.getPriority());
+        System.out.println("任务已加入队列: " + dataName + ", 优先级: " + dataset.getPriority() + ", epochs: " + taskEpochs + ", imgsz: " + taskImgsz);
         notifyNewTask();
     }
 
@@ -253,8 +319,8 @@ public class TrainingSchedulerService {
     private void executeTask(TrainingTask task) {
         String dataName = task.getDataName();
         try {
-            System.out.println("开始训练: " + dataName);
-            String jobId = yoloService.startTraining(dataName);
+            System.out.println("开始训练: " + dataName + ", epochs: " + task.getEpochs() + ", imgsz: " + task.getImgsz());
+            String jobId = yoloService.startTraining(dataName, task.getEpochs(), task.getImgsz());
 
             // 轮询训练状态
             while (!Thread.currentThread().isInterrupted()) {
@@ -303,10 +369,14 @@ public class TrainingSchedulerService {
     private static class TrainingTask {
         private final String dataName;
         private int priority;
+        private final int epochs;
+        private final int imgsz;
 
-        public TrainingTask(String dataName, int priority) {
+        public TrainingTask(String dataName, int priority, int epochs, int imgsz) {
             this.dataName = dataName;
             this.priority = priority;
+            this.epochs = epochs;
+            this.imgsz = imgsz;
         }
 
         public String getDataName() {
@@ -319,6 +389,14 @@ public class TrainingSchedulerService {
 
         public void setPriority(int priority) {
             this.priority = priority;
+        }
+
+        public int getEpochs() {
+            return epochs;
+        }
+
+        public int getImgsz() {
+            return imgsz;
         }
     }
 }

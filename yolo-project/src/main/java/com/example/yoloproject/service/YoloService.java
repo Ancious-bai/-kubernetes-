@@ -33,14 +33,14 @@ public class YoloService {
         return PROJECT_ROOT;
     }
 
-    public String startPreprocess(String inputDir) {
+    public String startPreprocess(String inputDir, int epochs, int imgsz) {
         String jobId = UUID.randomUUID().toString();
         JobStatus status = new JobStatus(jobId, "RUNNING", 0, "");
         jobStatusMap.put(jobId, status);
 
         executorService.submit(() -> {
             try {
-                ProcessBuilder pb = new ProcessBuilder("python", PREPROCESS_SCRIPT, "--input_dir", inputDir);
+                ProcessBuilder pb = new ProcessBuilder("python", PREPROCESS_SCRIPT, "--input_dir", inputDir, "--epochs", String.valueOf(epochs), "--imgsz", String.valueOf(imgsz));
                 pb.directory(new File(PROJECT_ROOT));
                 pb.redirectErrorStream(true);
 
@@ -49,7 +49,7 @@ public class YoloService {
                 StringBuilder logBuilder = new StringBuilder();
                 String line;
 
-                logBuilder.append("Running: python preprocess.py --input_dir ").append(inputDir).append("\n");
+                logBuilder.append("Running: python preprocess.py --input_dir ").append(inputDir).append(" --epochs ").append(epochs).append(" --imgsz ").append(imgsz).append("\n");
                 logBuilder.append("----------------------------------------------------\n");
                 
                 while ((line = reader.readLine()) != null) {
@@ -93,7 +93,7 @@ public class YoloService {
         return jobId;
     }
 
-    public String startTraining(String dataName) {
+    public String startTraining(String dataName, int epochs, int imgsz) {
         String jobId = UUID.randomUUID().toString();
         JobStatus status = new JobStatus(jobId, "RUNNING", 0, "");
         jobStatusMap.put(jobId, status);
@@ -108,6 +108,8 @@ public class YoloService {
         executorService.submit(() -> {
             try {
                 String yamlPath = PROJECT_ROOT + "\\k8s_jobs\\" + dataName + "-train.yaml";
+                
+                regenerateTrainYaml(dataName, epochs, imgsz);
                 
                 File yamlFile = new File(yamlPath);
                 StringBuilder logBuilder = new StringBuilder();
@@ -266,7 +268,7 @@ public class YoloService {
         return jobId;
     }
 
-    public String startTesting(String dataName) {
+    public String startTesting(String dataName, int imgsz) {
         String jobId = UUID.randomUUID().toString();
         JobStatus status = new JobStatus(jobId, "RUNNING", 0, "");
         jobStatusMap.put(jobId, status);
@@ -280,6 +282,8 @@ public class YoloService {
         executorService.submit(() -> {
             try {
                 String yamlPath = PROJECT_ROOT + "\\k8s_jobs\\" + dataName + "-test.yaml";
+                
+                regenerateTestYaml(dataName, imgsz);
                 
                 File yamlFile = new File(yamlPath);
                 StringBuilder logBuilder = new StringBuilder();
@@ -736,6 +740,113 @@ public class YoloService {
             }
         } catch (Exception e) {
             // Ignore
+        }
+    }
+
+    private void regenerateTrainYaml(String dataName, int epochs, int imgsz) {
+        try {
+            String yamlPath = PROJECT_ROOT + "\\k8s_jobs\\" + dataName + "-train.yaml";
+            Map<String, Object> jobConfig = buildK8sJobConfig(dataName, "train", epochs, imgsz);
+            writeYamlFile(yamlPath, jobConfig);
+        } catch (Exception e) {
+            System.out.println("重新生成训练YAML失败: " + e.getMessage());
+        }
+    }
+
+    private void regenerateTestYaml(String dataName, int imgsz) {
+        try {
+            String yamlPath = PROJECT_ROOT + "\\k8s_jobs\\" + dataName + "-test.yaml";
+            Map<String, Object> jobConfig = buildK8sJobConfig(dataName, "test", 0, imgsz);
+            writeYamlFile(yamlPath, jobConfig);
+        } catch (Exception e) {
+            System.out.println("重新生成测试YAML失败: " + e.getMessage());
+        }
+    }
+
+    private Map<String, Object> buildK8sJobConfig(String dataName, String jobType, int epochs, int imgsz) {
+        java.util.List<String> command = new java.util.ArrayList<>();
+        command.add("python3");
+        command.add(jobType + "_yolo.py");
+        command.add("--site");
+        command.add(dataName + "_processed");
+        if ("train".equals(jobType)) {
+            command.add("--epochs");
+            command.add(String.valueOf(epochs));
+            command.add("--imgsz");
+            command.add(String.valueOf(imgsz));
+        } else {
+            command.add("--imgsz");
+            command.add(String.valueOf(imgsz));
+        }
+
+        Map<String, Object> jobConfig = new java.util.LinkedHashMap<>();
+        jobConfig.put("apiVersion", "batch/v1");
+        jobConfig.put("kind", "Job");
+
+        Map<String, Object> metadata = new java.util.LinkedHashMap<>();
+        metadata.put("name", dataName + "-" + jobType + "-job");
+        Map<String, String> labels = new java.util.LinkedHashMap<>();
+        labels.put("site", dataName);
+        labels.put("type", jobType);
+        metadata.put("labels", labels);
+        jobConfig.put("metadata", metadata);
+
+        Map<String, Object> spec = new java.util.LinkedHashMap<>();
+        spec.put("parallelism", 1);
+        spec.put("completions", 1);
+
+        Map<String, Object> template = new java.util.LinkedHashMap<>();
+        Map<String, Object> podSpec = new java.util.LinkedHashMap<>();
+
+        java.util.List<Map<String, Object>> containers = new java.util.ArrayList<>();
+        Map<String, Object> container = new java.util.LinkedHashMap<>();
+        container.put("name", "yolo-container");
+        container.put("image", "yolov8-project:latest");
+        container.put("imagePullPolicy", "IfNotPresent");
+        container.put("command", command);
+
+        java.util.List<Map<String, String>> envList = new java.util.ArrayList<>();
+        Map<String, String> env = new java.util.LinkedHashMap<>();
+        env.put("name", "PYTHONUNBUFFERED");
+        env.put("value", "1");
+        envList.add(env);
+        container.put("env", envList);
+
+        java.util.List<Map<String, String>> volumeMounts = new java.util.ArrayList<>();
+        Map<String, String> mount = new java.util.LinkedHashMap<>();
+        mount.put("name", "app-volume");
+        mount.put("mountPath", "/app");
+        volumeMounts.add(mount);
+        container.put("volumeMounts", volumeMounts);
+
+        containers.add(container);
+        podSpec.put("containers", containers);
+        podSpec.put("restartPolicy", "Never");
+
+        java.util.List<Map<String, Object>> volumes = new java.util.ArrayList<>();
+        Map<String, Object> volume = new java.util.LinkedHashMap<>();
+        volume.put("name", "app-volume");
+        Map<String, String> hostPath = new java.util.LinkedHashMap<>();
+        hostPath.put("path", "/mnt/host/e/Ancious/Desktop/毕业设计/Code");
+        hostPath.put("type", "Directory");
+        volume.put("hostPath", hostPath);
+        volumes.add(volume);
+        podSpec.put("volumes", volumes);
+
+        template.put("spec", podSpec);
+        spec.put("template", template);
+        spec.put("backoffLimit", 4);
+        jobConfig.put("spec", spec);
+
+        return jobConfig;
+    }
+
+    private void writeYamlFile(String yamlPath, Map<String, Object> jobConfig) throws IOException {
+        File yamlFile = new File(yamlPath);
+        yamlFile.getParentFile().mkdirs();
+        org.yaml.snakeyaml.Yaml yaml = new org.yaml.snakeyaml.Yaml();
+        try (FileWriter writer = new FileWriter(yamlFile)) {
+            yaml.dump(jobConfig, writer);
         }
     }
 

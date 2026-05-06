@@ -73,15 +73,16 @@ public class YoloController {
     }
 
     @PostMapping("/preprocess")
-    public ResponseEntity<Map<String, String>> preprocess(@RequestBody ProcessRequest request) {
-        String dataName = request.getInputDir();
+    public ResponseEntity<Map<String, String>> preprocess(@RequestBody Map<String, Object> request) {
+        String dataName = (String) request.get("inputDir");
+        int epochs = request.get("epochs") != null ? ((Number) request.get("epochs")).intValue() : 2;
+        int imgsz = request.get("imgsz") != null ? ((Number) request.get("imgsz")).intValue() : 640;
         
-        // 从数据库获取完整路径
         String inputDir = datasetRepository.findByName(dataName)
                 .map(Dataset::getInputPath)
                 .orElse(dataName);
         
-        String jobId = yoloService.startPreprocess(inputDir);
+        String jobId = yoloService.startPreprocess(inputDir, epochs, imgsz);
         
         Map<String, String> response = new HashMap<>();
         response.put("jobId", jobId);
@@ -115,9 +116,11 @@ public class YoloController {
     }
 
     @PostMapping("/train")
-    public ResponseEntity<Map<String, String>> train(@RequestBody ProcessRequest request) {
-        String dataName = request.getInputDir();
-        String jobId = yoloService.startTraining(dataName);
+    public ResponseEntity<Map<String, String>> train(@RequestBody Map<String, Object> request) {
+        String dataName = (String) request.get("inputDir");
+        int epochs = request.get("epochs") != null ? ((Number) request.get("epochs")).intValue() : 2;
+        int imgsz = request.get("imgsz") != null ? ((Number) request.get("imgsz")).intValue() : 640;
+        String jobId = yoloService.startTraining(dataName, epochs, imgsz);
         
         Map<String, String> response = new HashMap<>();
         response.put("jobId", jobId);
@@ -239,9 +242,10 @@ public class YoloController {
     }
 
     @PostMapping("/test")
-    public ResponseEntity<Map<String, String>> test(@RequestBody ProcessRequest request) {
-        String dataName = request.getInputDir();
-        String jobId = yoloService.startTesting(dataName);
+    public ResponseEntity<Map<String, String>> test(@RequestBody Map<String, Object> request) {
+        String dataName = (String) request.get("inputDir");
+        int imgsz = request.get("imgsz") != null ? ((Number) request.get("imgsz")).intValue() : 640;
+        String jobId = yoloService.startTesting(dataName, imgsz);
         
         Map<String, String> response = new HashMap<>();
         response.put("jobId", jobId);

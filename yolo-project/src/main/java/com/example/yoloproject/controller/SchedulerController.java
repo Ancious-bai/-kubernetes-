@@ -17,12 +17,14 @@ public class SchedulerController {
     private TrainingSchedulerService schedulerService;
 
     @PostMapping("/add")
-    public ResponseEntity<Map<String, String>> addTask(@RequestBody Map<String, String> request) {
-        String dataName = request.get("dataName");
+    public ResponseEntity<Map<String, String>> addTask(@RequestBody Map<String, Object> request) {
+        String dataName = (String) request.get("dataName");
+        Integer epochs = request.get("epochs") != null ? ((Number) request.get("epochs")).intValue() : null;
+        Integer imgsz = request.get("imgsz") != null ? ((Number) request.get("imgsz")).intValue() : null;
         Map<String, String> response = new HashMap<>();
         
         try {
-            schedulerService.addTask(dataName);
+            schedulerService.addTask(dataName, epochs, imgsz);
             response.put("message", "任务已加入队列");
             response.put("status", "success");
             return ResponseEntity.ok(response);
@@ -53,7 +55,7 @@ public class SchedulerController {
     @PostMapping("/priority")
     public ResponseEntity<Map<String, String>> updatePriority(@RequestBody Map<String, Object> request) {
         String dataName = (String) request.get("dataName");
-        Integer priority = (Integer) request.get("priority");
+        Integer priority = ((Number) request.get("priority")).intValue();
         Map<String, String> response = new HashMap<>();
         
         try {
@@ -70,7 +72,7 @@ public class SchedulerController {
 
     @PostMapping("/max-concurrent")
     public ResponseEntity<Map<String, String>> setMaxConcurrentTasks(@RequestBody Map<String, Object> request) {
-        Integer max = (Integer) request.get("max");
+        Integer max = ((Number) request.get("max")).intValue();
         Map<String, String> response = new HashMap<>();
         
         try {
@@ -89,6 +91,63 @@ public class SchedulerController {
     public ResponseEntity<Map<String, Object>> getMaxConcurrentTasks() {
         Map<String, Object> response = new HashMap<>();
         response.put("max", schedulerService.getMaxConcurrentTasks());
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/default-epochs")
+    public ResponseEntity<Map<String, String>> setDefaultEpochs(@RequestBody Map<String, Object> request) {
+        Integer epochs = ((Number) request.get("epochs")).intValue();
+        Map<String, String> response = new HashMap<>();
+        
+        try {
+            schedulerService.setDefaultEpochs(epochs);
+            response.put("message", "默认训练轮数已更新为: " + epochs);
+            response.put("status", "success");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            response.put("message", e.getMessage());
+            response.put("status", "error");
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
+
+    @GetMapping("/default-epochs")
+    public ResponseEntity<Map<String, Object>> getDefaultEpochs() {
+        Map<String, Object> response = new HashMap<>();
+        response.put("epochs", schedulerService.getDefaultEpochs());
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/default-imgsz")
+    public ResponseEntity<Map<String, String>> setDefaultImgsz(@RequestBody Map<String, Object> request) {
+        Integer imgsz = ((Number) request.get("imgsz")).intValue();
+        Map<String, String> response = new HashMap<>();
+        
+        try {
+            schedulerService.setDefaultImgsz(imgsz);
+            response.put("message", "默认图像尺寸已更新为: " + imgsz);
+            response.put("status", "success");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            response.put("message", e.getMessage());
+            response.put("status", "error");
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
+
+    @GetMapping("/default-imgsz")
+    public ResponseEntity<Map<String, Object>> getDefaultImgsz() {
+        Map<String, Object> response = new HashMap<>();
+        response.put("imgsz", schedulerService.getDefaultImgsz());
+        return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/config")
+    public ResponseEntity<Map<String, Object>> getConfig() {
+        Map<String, Object> response = new HashMap<>();
+        response.put("maxConcurrentTasks", schedulerService.getMaxConcurrentTasks());
+        response.put("defaultEpochs", schedulerService.getDefaultEpochs());
+        response.put("defaultImgsz", schedulerService.getDefaultImgsz());
         return ResponseEntity.ok(response);
     }
 
