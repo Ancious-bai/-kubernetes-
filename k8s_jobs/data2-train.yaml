@@ -12,7 +12,7 @@ spec:
       - name: yolo-container
         image: yolov8-project:latest
         imagePullPolicy: IfNotPresent
-        command: [python3, train_yolo.py, --site, data2_processed, --epochs, '2',
+        command: [python3, train_yolo.py, --site, data2_processed, --epochs, '3',
           --imgsz, '640']
         env:
         - {name: PYTHONUNBUFFERED, value: '1'}

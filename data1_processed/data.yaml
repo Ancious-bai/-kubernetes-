@@ -1,7 +1,0 @@
-names:
-- gangue
-nc: 1
-path: ./data1_processed
-test: images/test
-train: images/train
-val: images/val

@@ -109,6 +109,8 @@ public class YoloService {
             try {
                 String yamlPath = PROJECT_ROOT + "\\k8s_jobs\\" + dataName + "-train.yaml";
                 
+                deleteK8sJob(dataName + "-train-job");
+                
                 regenerateTrainYaml(dataName, epochs, imgsz);
                 
                 File yamlFile = new File(yamlPath);
@@ -282,6 +284,8 @@ public class YoloService {
         executorService.submit(() -> {
             try {
                 String yamlPath = PROJECT_ROOT + "\\k8s_jobs\\" + dataName + "-test.yaml";
+                
+                deleteK8sJob(dataName + "-test-job");
                 
                 regenerateTestYaml(dataName, imgsz);
                 
@@ -740,6 +744,19 @@ public class YoloService {
             }
         } catch (Exception e) {
             // Ignore
+        }
+    }
+
+    private void deleteK8sJob(String jobName) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder("kubectl", "delete", "job", jobName, "--ignore-not-found=true");
+            pb.directory(new File(PROJECT_ROOT));
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+            process.waitFor();
+            System.out.println("已删除旧Job: " + jobName);
+        } catch (Exception e) {
+            System.out.println("删除旧Job失败(可忽略): " + jobName + " - " + e.getMessage());
         }
     }
 
