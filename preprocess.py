@@ -2,7 +2,7 @@ import argparse
 import os
 import glob
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath, PurePosixPath
 
 import numpy as np
 import cv2
@@ -131,7 +131,7 @@ def process_single_sample(
     blank_low_files = sorted(glob.glob(str(sample_dir / "blank" / "Low" / "*")))
     if not blank_high_files or not blank_low_files:
         print(f"[WARN] {sample_dir} 空场图缺失，跳过该目录")
-        return
+        return start_idx
 
     # 使用 Pillow 以兼容 16 位 PNG
     try:
@@ -139,7 +139,7 @@ def process_single_sample(
         blank_low = read_image_gray_anydepth(blank_low_files[0])
     except Exception as e:
         print(f"[WARN] {sample_dir} 空场图读取异常: {e}，跳过该目录")
-        return
+        return start_idx
 
     if blank_high is None or blank_low is None:
         print(f"[WARN] {sample_dir} 空场图读取失败，跳过该目录")
@@ -255,87 +255,6 @@ def generate_yaml(data_root: Path):
     with open(output_path, "w", encoding="utf-8") as f:
         yaml.dump(yaml_data, f, allow_unicode=True, default_flow_style=False)
 
-def generate_k8s_job_yaml(data_name: str, job_type: str, output_dir: str = "k8s_jobs", epochs: int = 2, imgsz: int = 640):
-    """
-    生成 Kubernetes Job YAML 配置文件
-
-    :param data_name: 数据集名称（如 data1, data2）
-    :param job_type: 任务类型（train 或 test）
-    :param output_dir: 输出目录
-    :param epochs: 训练轮数（仅train类型有效）
-    :param imgsz: 图像尺寸
-    """
-    command = ["python3", f"{job_type}_yolo.py", "--site", f"{data_name}_processed"]
-    if job_type == "train":
-        command.extend(["--epochs", str(epochs), "--imgsz", str(imgsz)])
-    elif job_type == "test":
-        command.extend(["--imgsz", str(imgsz)])
-
-    job_config = {
-        "apiVersion": "batch/v1",
-        "kind": "Job",
-        "metadata": {
-            "name": f"{data_name}-{job_type}-job",
-            "labels": {
-                "site": data_name,
-                "type": job_type
-            }
-        },
-        "spec": {
-            "parallelism": 1,
-            "completions": 1,
-            "template": {
-                "spec": {
-                    "containers": [
-                        {
-                            "name": "yolo-container",
-                            "image": "yolov8-project:latest",
-                            "imagePullPolicy": "IfNotPresent",
-                            "command": command,
-                            "env": [
-                                {
-                                    "name": "PYTHONUNBUFFERED",
-                                    "value": "1"
-                                }
-                            ],
-                            "volumeMounts": [
-                                {
-                                    "name": "app-volume",
-                                    "mountPath": "/app"
-                                }
-                            ]
-                        }
-                    ],
-                    "restartPolicy": "Never",
-                    "volumes": [
-                        {
-                            "name": "app-volume",
-                            "hostPath": {
-                                "path": "/mnt/host/e/Ancious/Desktop/毕业设计/Code",
-                                "type": "Directory"
-                            }
-                        }
-                    ]
-                }
-            },
-            "backoffLimit": 4
-        }
-    }
-
-    # 确保输出目录存在
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    # 生成文件名
-    yaml_filename = f"{data_name}-{job_type}.yaml"
-    yaml_path = output_path / yaml_filename
-
-    # 写入 YAML 文件
-    with open(yaml_path, "w", encoding="utf-8") as f:
-        yaml.dump(job_config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-
-    return yaml_path
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="煤炭矸石数据集处理脚本")
@@ -345,8 +264,6 @@ if __name__ == "__main__":
         required=True,
         help="要处理的数据集文件夹路径"
     )
-    parser.add_argument("--epochs", type=int, default=2, help="训练轮数")
-    parser.add_argument("--imgsz", type=int, default=640, help="图像尺寸")
     args = parser.parse_args()
     data_root = os.path.abspath(args.input_dir)
     if not os.path.exists(data_root):
@@ -376,11 +293,3 @@ if __name__ == "__main__":
         # frac_thresh: rock 内高比值像素占比门限, 可按需要微调
         mask_yolo.generate_labels_for_split(Path(out_root), split, frac_thresh=0.01)
     print("\n🎉 数据标记完成！")
-
-    # 生成 Kubernetes Job YAML 文件
-    output_dir = "k8s_jobs"
-    generate_k8s_job_yaml(data_name, "train", output_dir, epochs=args.epochs, imgsz=args.imgsz)
-    generate_k8s_job_yaml(data_name, "test", output_dir, imgsz=args.imgsz)
-    print(f"\n🎉 所有配置文件已生成！使用命令部署:")
-    print(f"  kubectl apply -f {project_root}/{output_dir}/{data_name}-train.yaml")
-    print(f"  kubectl apply -f {project_root}/{output_dir}/{data_name}-test.yaml")

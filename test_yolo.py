@@ -1,3 +1,29 @@
+import os, shutil
+
+YOLO_DIR = '/tmp/Ultralytics'
+os.environ['YOLO_CONFIG_DIR'] = YOLO_DIR
+os.environ['ULTRALYTICS_DISABLE_AUTOUPDATE'] = '1'
+os.makedirs(YOLO_DIR, exist_ok=True)
+
+SYSTEM_FONT_CANDIDATES = [
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+    '/usr/share/fonts/TTF/DejaVuSans.ttf',
+    '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
+]
+
+FONT_PATH = os.path.join(YOLO_DIR, 'Arial.ttf')
+if not os.path.exists(FONT_PATH):
+    for src in SYSTEM_FONT_CANDIDATES:
+        if os.path.exists(src):
+            shutil.copy(src, FONT_PATH)
+            print(f"已复制系统字体 {src} -> {FONT_PATH}")
+            break
+    else:
+        with open(FONT_PATH, 'w') as f:
+            f.write('')
+        print(f"警告: 未找到系统字体，已创建空占位 {FONT_PATH}")
+
 from ultralytics import YOLO
 import argparse
 
@@ -6,12 +32,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--site', type=str, required=True, help="yaml文件根目录")
     parser.add_argument('--imgsz', type=int, default=640, help="图像尺寸")
+    parser.add_argument('--name', type=str, default=None, help="训练输出目录名")
     args = parser.parse_args()
 
     site = args.site
     data_yaml = f"{site}/data.yaml"
 
-    model_path = f"runs/detect/{site}_train/weights/best.pt"
+    train_name = args.name if args.name else f"{site}_train"
+    model_path = f"runs/detect/{train_name}/weights/best.pt"
     print(f"Using model: {model_path}")
 
     import glob
@@ -21,13 +49,19 @@ def main():
         return
 
     model = YOLO(model_files[0])
+    test_name = train_name + "_test"
+    # 确保字体在调用 val() 前已就位（离线容器关键修复）
+    if not os.path.exists(FONT_PATH) or os.path.getsize(FONT_PATH) == 0:
+        for src in SYSTEM_FONT_CANDIDATES:
+            if os.path.exists(src):
+                shutil.copy(src, FONT_PATH); break
     results = model.val(
         data=data_yaml,
         split="test",
         imgsz=args.imgsz,
         batch=4,
         workers=1,
-        name=f"{site}_test",
+        name=test_name,
         device="cpu",
         plots=False,
         visualize=False,

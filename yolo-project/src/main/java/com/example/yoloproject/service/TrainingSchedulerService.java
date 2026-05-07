@@ -1,9 +1,9 @@
 package com.example.yoloproject.service;
 
-import com.example.yoloproject.entity.Dataset;
 import com.example.yoloproject.entity.SystemConfig;
-import com.example.yoloproject.repository.DatasetRepository;
+import com.example.yoloproject.entity.TrainingRecord;
 import com.example.yoloproject.repository.SystemConfigRepository;
+import com.example.yoloproject.repository.TrainingRecordRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -15,10 +15,10 @@ import java.util.concurrent.*;
 public class TrainingSchedulerService {
 
     @Autowired
-    private DatasetRepository datasetRepository;
+    private SystemConfigRepository systemConfigRepository;
 
     @Autowired
-    private SystemConfigRepository systemConfigRepository;
+    private TrainingRecordRepository trainingRecordRepository;
 
     @Autowired
     private YoloService yoloService;
@@ -37,18 +37,14 @@ public class TrainingSchedulerService {
     private volatile int defaultEpochs = 2;
     private volatile int defaultImgsz = 640;
 
-    // 优先级队列：数字越小优先级越高
     private final PriorityQueue<TrainingTask> taskQueue = new PriorityQueue<>(
         Comparator.comparingInt(TrainingTask::getPriority)
     );
 
-    // 正在运行的任务集合
     private final Set<TrainingTask> runningTasks = ConcurrentHashMap.newKeySet();
 
-    // 任务状态映射
     private final Map<String, String> taskStatusMap = new ConcurrentHashMap<>();
 
-    // 任务进度映射
     private final Map<String, Integer> taskProgressMap = new ConcurrentHashMap<>();
 
     private final ExecutorService schedulerExecutor = Executors.newSingleThreadExecutor();
@@ -65,15 +61,14 @@ public class TrainingSchedulerService {
     private void loadMaxConcurrentTasksFromDB() {
         SystemConfig config = systemConfigRepository.findByConfigKey(MAX_CONCURRENT_TASKS_KEY)
             .orElseGet(() -> {
-                // 如果不存在，创建默认配置
                 SystemConfig defaultConfig = new SystemConfig(
-                    MAX_CONCURRENT_TASKS_KEY, 
-                    MAX_CONCURRENT_TASKS_DEFAULT, 
+                    MAX_CONCURRENT_TASKS_KEY,
+                    MAX_CONCURRENT_TASKS_DEFAULT,
                     MAX_CONCURRENT_TASKS_DESC
                 );
                 return systemConfigRepository.save(defaultConfig);
             });
-        
+
         try {
             this.maxConcurrentTasks = Integer.parseInt(config.getConfigValue());
             System.out.println("从数据库加载最大并发训练数: " + this.maxConcurrentTasks);
@@ -86,13 +81,12 @@ public class TrainingSchedulerService {
     public synchronized void setMaxConcurrentTasks(int max) {
         if (max >= 1 && max <= 10) {
             this.maxConcurrentTasks = max;
-            
-            // 保存到数据库
+
             SystemConfig config = systemConfigRepository.findByConfigKey(MAX_CONCURRENT_TASKS_KEY)
                 .orElse(new SystemConfig(MAX_CONCURRENT_TASKS_KEY, String.valueOf(max), MAX_CONCURRENT_TASKS_DESC));
             config.setConfigValue(String.valueOf(max));
             systemConfigRepository.save(config);
-            
+
             System.out.println("最大并发训练数已保存到数据库: " + max);
             notifyNewTask();
         }
@@ -160,77 +154,87 @@ public class TrainingSchedulerService {
         return defaultImgsz;
     }
 
-    public synchronized void addTask(String dataName, Integer epochs, Integer imgsz) {
-        Dataset dataset = datasetRepository.findByName(dataName).orElse(null);
-        if (dataset == null) {
-            throw new IllegalArgumentException("数据集不存在: " + dataName);
-        }
+    public synchronized void addTask(String dataName, Integer epochs, Integer imgsz, String username, Integer priority) {
+        int taskEpochs = (epochs != null && epochs > 0) ? epochs : defaultEpochs;
+        int taskImgsz = (imgsz != null && imgsz > 0) ? imgsz : defaultImgsz;
+        int taskPriority = (priority != null && priority >= 1 && priority <= 10) ? priority : 5;
+        String recordName = dataName + "-e" + taskEpochs + "-i" + taskImgsz;
 
         for (TrainingTask task : taskQueue) {
-            if (task.getDataName().equals(dataName)) {
-                throw new IllegalArgumentException("任务已在队列中: " + dataName);
+            if (task.getRecordName().equals(recordName)) {
+                throw new IllegalArgumentException("训练记录已在队列中: " + recordName);
             }
         }
         for (TrainingTask task : runningTasks) {
-            if (task.getDataName().equals(dataName)) {
-                throw new IllegalArgumentException("任务正在运行: " + dataName);
+            if (task.getRecordName().equals(recordName)) {
+                throw new IllegalArgumentException("训练记录正在运行: " + recordName);
             }
         }
 
-        int taskEpochs = (epochs != null && epochs > 0) ? epochs : defaultEpochs;
-        int taskImgsz = (imgsz != null && imgsz > 0) ? imgsz : defaultImgsz;
-        TrainingTask task = new TrainingTask(dataName, dataset.getPriority(), taskEpochs, taskImgsz);
+        if (trainingRecordRepository.existsByRecordName(recordName)) {
+            TrainingRecord existing = trainingRecordRepository.findByRecordName(recordName).orElse(null);
+            if (existing != null && "RUNNING".equals(existing.getTrainStatus())) {
+                throw new IllegalArgumentException("训练记录正在运行: " + recordName);
+            }
+            if (existing != null && "QUEUED".equals(existing.getTrainStatus())) {
+                throw new IllegalArgumentException("训练记录已在队列中: " + recordName);
+            }
+        }
+
+        TrainingTask task = new TrainingTask(dataName, taskPriority, taskEpochs, taskImgsz, recordName);
         taskQueue.add(task);
 
-        datasetRepository.findByName(dataName).ifPresent(d -> {
-            d.setTrainStatus("QUEUED");
-            datasetRepository.save(d);
-        });
-        taskStatusMap.put(dataName, "QUEUED");
+        TrainingRecord record = trainingRecordRepository.findByRecordName(recordName).orElse(null);
+        if (record == null) {
+            record = new TrainingRecord(dataName, taskEpochs, taskImgsz, username != null ? username : "system");
+        }
+        record.setTrainStatus("QUEUED");
+        record.setPriority(taskPriority);
+        trainingRecordRepository.save(record);
 
-        System.out.println("任务已加入队列: " + dataName + ", 优先级: " + dataset.getPriority() + ", epochs: " + taskEpochs + ", imgsz: " + taskImgsz);
+        taskStatusMap.put(recordName, "QUEUED");
+
+        System.out.println("任务已加入队列: " + recordName + ", 优先级: " + taskPriority + ", epochs: " + taskEpochs + ", imgsz: " + taskImgsz);
         notifyNewTask();
     }
 
-    public synchronized void removeTask(String dataName) {
+    public synchronized void removeTask(String recordName) {
         Iterator<TrainingTask> iterator = taskQueue.iterator();
         while (iterator.hasNext()) {
             TrainingTask task = iterator.next();
-            if (task.getDataName().equals(dataName)) {
+            if (task.getRecordName().equals(recordName)) {
                 iterator.remove();
-                datasetRepository.findByName(dataName).ifPresent(d -> {
-                    d.setTrainStatus("IDLE");
-                    datasetRepository.save(d);
+                trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
+                    r.setTrainStatus("IDLE");
+                    trainingRecordRepository.save(r);
                 });
-                taskStatusMap.put(dataName, "IDLE");
-                System.out.println("任务已从队列移除: " + dataName);
+                taskStatusMap.put(recordName, "IDLE");
+                System.out.println("任务已从队列移除: " + recordName);
                 return;
             }
         }
-        throw new IllegalArgumentException("任务不在队列中: " + dataName);
+        throw new IllegalArgumentException("任务不在队列中: " + recordName);
     }
 
-    public synchronized void updatePriority(String dataName, int newPriority) {
+    public synchronized void updatePriority(String recordName, int newPriority) {
         if (newPriority < 1 || newPriority > 10) {
             throw new IllegalArgumentException("优先级必须在1-10之间");
         }
 
-        // 更新队列中的任务优先级
         for (TrainingTask task : taskQueue) {
-            if (task.getDataName().equals(dataName)) {
+            if (task.getRecordName().equals(recordName)) {
                 task.setPriority(newPriority);
                 reorderQueue();
                 break;
             }
         }
 
-        // 更新数据库中的优先级
-        datasetRepository.findByName(dataName).ifPresent(d -> {
-            d.setPriority(newPriority);
-            datasetRepository.save(d);
+        trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
+            r.setPriority(newPriority);
+            trainingRecordRepository.save(r);
         });
 
-        System.out.println("任务优先级已更新: " + dataName + ", 新优先级: " + newPriority);
+        System.out.println("任务优先级已更新: " + recordName + ", 新优先级: " + newPriority);
     }
 
     private void reorderQueue() {
@@ -239,38 +243,38 @@ public class TrainingSchedulerService {
         taskQueue.addAll(tasks);
     }
 
-    public String getTaskStatus(String dataName) {
-        return taskStatusMap.getOrDefault(dataName, "IDLE");
+    public String getTaskStatus(String recordName) {
+        return taskStatusMap.getOrDefault(recordName, "IDLE");
     }
 
-    public int getTaskProgress(String dataName) {
-        return taskProgressMap.getOrDefault(dataName, 0);
+    public int getTaskProgress(String recordName) {
+        return taskProgressMap.getOrDefault(recordName, 0);
     }
 
     public List<Map<String, Object>> getQueueStatus() {
         List<Map<String, Object>> statusList = new ArrayList<>();
 
-        // 正在运行的任务
         for (TrainingTask task : runningTasks) {
             Map<String, Object> status = new HashMap<>();
             status.put("dataName", task.getDataName());
+            status.put("recordName", task.getRecordName());
             status.put("status", "RUNNING");
             status.put("priority", task.getPriority());
-            status.put("progress", taskProgressMap.getOrDefault(task.getDataName(), 0));
+            status.put("progress", taskProgressMap.getOrDefault(task.getRecordName(), 0));
             status.put("position", "running");
             statusList.add(status);
         }
 
-        // 队列中的任务
         List<TrainingTask> tasks = new ArrayList<>(taskQueue);
         Collections.sort(tasks, Comparator.comparingInt(TrainingTask::getPriority));
         int position = 1;
         for (TrainingTask task : tasks) {
             Map<String, Object> status = new HashMap<>();
             status.put("dataName", task.getDataName());
+            status.put("recordName", task.getRecordName());
             status.put("status", "QUEUED");
             status.put("priority", task.getPriority());
-            status.put("progress", taskProgressMap.getOrDefault(task.getDataName(), 0));
+            status.put("progress", taskProgressMap.getOrDefault(task.getRecordName(), 0));
             status.put("position", position++);
             statusList.add(status);
         }
@@ -282,25 +286,21 @@ public class TrainingSchedulerService {
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 synchronized (this) {
-                    // 检查是否可以启动新任务
                     while (taskQueue.isEmpty() || runningTasks.size() >= maxConcurrentTasks) {
                         wait();
                     }
 
-                    // 启动尽可能多的任务
                     while (runningTasks.size() < maxConcurrentTasks && !taskQueue.isEmpty()) {
                         TrainingTask task = taskQueue.poll();
                         if (task != null) {
                             runningTasks.add(task);
 
-                            // 更新状态
-                            datasetRepository.findByName(task.getDataName()).ifPresent(d -> {
-                                d.setTrainStatus("RUNNING");
-                                datasetRepository.save(d);
+                            trainingRecordRepository.findByRecordName(task.getRecordName()).ifPresent(r -> {
+                                r.setTrainStatus("RUNNING");
+                                trainingRecordRepository.save(r);
                             });
-                            taskStatusMap.put(task.getDataName(), "RUNNING");
+                            taskStatusMap.put(task.getRecordName(), "RUNNING");
 
-                            // 在单独的线程中执行任务
                             workerExecutor.submit(() -> executeTask(task));
                         }
                     }
@@ -318,30 +318,30 @@ public class TrainingSchedulerService {
 
     private void executeTask(TrainingTask task) {
         String dataName = task.getDataName();
+        String recordName = task.getRecordName();
         try {
-            System.out.println("开始训练: " + dataName + ", epochs: " + task.getEpochs() + ", imgsz: " + task.getImgsz());
-            String jobId = yoloService.startTraining(dataName, task.getEpochs(), task.getImgsz());
+            System.out.println("开始训练: " + recordName + ", epochs: " + task.getEpochs() + ", imgsz: " + task.getImgsz());
+            String jobId = yoloService.startTraining(dataName, task.getEpochs(), task.getImgsz(), recordName);
 
-            // 轮询训练状态
             while (!Thread.currentThread().isInterrupted()) {
                 var status = yoloService.getJobStatus(jobId);
                 if (status != null) {
-                    taskProgressMap.put(dataName, status.getProgress());
-                    datasetRepository.findByName(dataName).ifPresent(d -> {
-                        d.setTrainProgress(status.getProgress());
-                        datasetRepository.save(d);
+                    taskProgressMap.put(recordName, status.getProgress());
+                    trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
+                        r.setTrainProgress(status.getProgress());
+                        trainingRecordRepository.save(r);
                     });
 
-                    if ("COMPLETED".equals(status.getStatus()) || 
-                        "DONE".equals(status.getStatus()) || 
+                    if ("COMPLETED".equals(status.getStatus()) ||
+                        "DONE".equals(status.getStatus()) ||
                         "FAILED".equals(status.getStatus())) {
-                        
+
                         if ("COMPLETED".equals(status.getStatus()) || "DONE".equals(status.getStatus())) {
-                            System.out.println("训练完成: " + dataName);
-                            taskStatusMap.put(dataName, "COMPLETED");
+                            System.out.println("训练完成: " + recordName);
+                            taskStatusMap.put(recordName, "COMPLETED");
                         } else {
-                            System.out.println("训练失败: " + dataName);
-                            taskStatusMap.put(dataName, "FAILED");
+                            System.out.println("训练失败: " + recordName);
+                            taskStatusMap.put(recordName, "FAILED");
                         }
                         break;
                     }
@@ -349,11 +349,10 @@ public class TrainingSchedulerService {
                 Thread.sleep(1000);
             }
         } catch (Exception e) {
-            System.out.println("训练异常: " + dataName + ", " + e.getMessage());
+            System.out.println("训练异常: " + recordName + ", " + e.getMessage());
             e.printStackTrace();
-            taskStatusMap.put(dataName, "FAILED");
+            taskStatusMap.put(recordName, "FAILED");
         } finally {
-            // 任务完成，从运行列表中移除
             synchronized (this) {
                 runningTasks.remove(task);
                 notifyNewTask();
@@ -365,18 +364,19 @@ public class TrainingSchedulerService {
         notify();
     }
 
-    // 内部类：训练任务
     private static class TrainingTask {
         private final String dataName;
         private int priority;
         private final int epochs;
         private final int imgsz;
+        private final String recordName;
 
-        public TrainingTask(String dataName, int priority, int epochs, int imgsz) {
+        public TrainingTask(String dataName, int priority, int epochs, int imgsz, String recordName) {
             this.dataName = dataName;
             this.priority = priority;
             this.epochs = epochs;
             this.imgsz = imgsz;
+            this.recordName = recordName;
         }
 
         public String getDataName() {
@@ -397,6 +397,10 @@ public class TrainingSchedulerService {
 
         public int getImgsz() {
             return imgsz;
+        }
+
+        public String getRecordName() {
+            return recordName;
         }
     }
 }

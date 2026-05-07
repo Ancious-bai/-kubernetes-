@@ -1,0 +1,57 @@
+package com.example.yoloproject.config;
+
+import jakarta.servlet.*;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+import org.springframework.util.AntPathMatcher;
+
+import java.io.IOException;
+import java.util.List;
+
+@Component
+public class JwtAuthFilter implements Filter {
+
+    @Autowired
+    private JwtUtil jwtUtil;
+
+    private static final List<String> PUBLIC_PATHS = List.of(
+            "/api/auth/login",
+            "/api/dialog/folder"
+    );
+
+    private final AntPathMatcher pathMatcher = new AntPathMatcher();
+
+    @Override
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
+        HttpServletRequest httpRequest = (HttpServletRequest) request;
+        HttpServletResponse httpResponse = (HttpServletResponse) response;
+
+        String path = httpRequest.getRequestURI();
+
+        for (String publicPath : PUBLIC_PATHS) {
+            if (pathMatcher.match(publicPath, path)) {
+                chain.doFilter(request, response);
+                return;
+            }
+        }
+
+        String authHeader = httpRequest.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            String token = authHeader.substring(7);
+            if (jwtUtil.isTokenValid(token)) {
+                httpRequest.setAttribute("userId", jwtUtil.getUserId(token));
+                httpRequest.setAttribute("username", jwtUtil.getUsername(token));
+                httpRequest.setAttribute("role", jwtUtil.getRole(token));
+                chain.doFilter(request, response);
+                return;
+            }
+        }
+
+        httpResponse.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        httpResponse.setContentType("application/json;charset=UTF-8");
+        httpResponse.getWriter().write("{\"message\":\"未登录或登录已过期\",\"status\":\"unauthorized\"}");
+    }
+}
