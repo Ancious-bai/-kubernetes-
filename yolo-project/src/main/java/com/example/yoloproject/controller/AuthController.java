@@ -1,6 +1,5 @@
 package com.example.yoloproject.controller;
 
-import com.example.yoloproject.entity.OperationLog;
 import com.example.yoloproject.entity.User;
 import com.example.yoloproject.service.AuthService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -9,7 +8,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -42,12 +40,14 @@ public class AuthController {
     @PostMapping("/register")
     public ResponseEntity<Map<String, Object>> register(@RequestBody Map<String, String> request, HttpServletRequest httpRequest) {
         String operatorRole = (String) httpRequest.getAttribute("role");
+        String operatorUsername = (String) httpRequest.getAttribute("username");
         Map<String, Object> response = new HashMap<>();
         try {
             User user = authService.register(
                     request.get("username"),
                     request.get("password"),
                     request.getOrDefault("role", "USER"),
+                    operatorUsername,
                     operatorRole
             );
             response.put("message", "用户创建成功");

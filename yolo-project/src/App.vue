@@ -12,22 +12,26 @@
     </div>
   </div>
 
-  <div v-else class="app-container">
+  <div v-else class="app-layout">
     <div class="bg-decoration"><div class="bg-circle bg-circle-1"></div><div class="bg-circle bg-circle-2"></div><div class="bg-circle bg-circle-3"></div></div>
-    <div class="content-wrapper">
-      <header class="app-header">
-        <div class="header-content">
-          <div class="logo-area"><div class="logo-icon">Y</div><h1>YOLO 训练管理系统</h1></div>
-          <div class="header-right">
-            <el-tag :type="currentUser.role==='ROOT'?'danger':currentUser.role==='ADMIN'?'warning':'info'" size="small">{{ currentUser.role }}</el-tag>
-            <span class="username">{{ currentUser.username }}</span>
-            <el-button v-if="currentUser.role==='ROOT'" size="small" type="danger" plain @click="handleCleanup">清空数据</el-button>
-            <el-button size="small" type="danger" @click="handleLogout">退出</el-button>
-          </div>
-        </div>
-      </header>
 
-      <main class="app-main">
+    <aside class="sidebar">
+      <div class="sidebar-logo"><div class="logo-icon">Y</div><span class="logo-text">YOLO</span></div>
+      <nav class="sidebar-nav">
+        <div class="nav-item" :class="{active:activePage==='main'}" @click="activePage='main'"><el-icon><Monitor /></el-icon><span>训练管理</span></div>
+        <div class="nav-item" :class="{active:activePage==='logs'}" @click="switchToLogs"><el-icon><Document /></el-icon><span>操作日志</span></div>
+        <div class="nav-item" v-if="isAdmin" :class="{active:activePage==='users'}" @click="switchToUsers"><el-icon><UserFilled /></el-icon><span>用户管理</span></div>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="user-badge"><el-tag :type="currentUser.role==='ROOT'?'danger':currentUser.role==='ADMIN'?'warning':'info'" size="small">{{ currentUser.role }}</el-tag><span class="user-name">{{ currentUser.username }}</span></div>
+        <div class="footer-actions"><el-button v-if="currentUser.role==='ROOT'" size="small" type="danger" plain @click="handleCleanup">清空</el-button><el-button size="small" type="danger" @click="handleLogout">退出</el-button></div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <!-- ==================== 主页：训练管理 ==================== -->
+      <div v-show="activePage==='main'" class="page-main">
+        <div class="page-header"><h2>训练管理</h2></div>
         <div class="top-section">
           <el-card shadow="hover" class="top-card dataset-card-top">
             <template #header><span class="card-title">添加数据集</span></template>
@@ -37,10 +41,7 @@
               <el-button type="primary" @click="handleAddDataset" :loading="currentStep==='addDataset'">添加</el-button>
             </div>
             <div class="drop-zone" :class="{'drop-zone-active':isDragOver}" @dragover.prevent="isDragOver=true" @dragleave.prevent="isDragOver=false" @drop.prevent="handleDrop">
-              <div class="drop-zone-text">
-                <el-icon size="28"><UploadFilled /></el-icon>
-                <span>拖拽文件夹到此处添加数据集（支持多个）</span>
-              </div>
+              <div class="drop-zone-text"><el-icon size="28"><UploadFilled /></el-icon><span>拖拽文件夹到此处添加数据集（支持多个）</span></div>
             </div>
           </el-card>
           <el-card shadow="hover" class="top-card config-card-top">
@@ -56,48 +57,26 @@
         <div class="datasets-section">
           <el-card shadow="hover" v-for="ds in pagedDatasets" :key="ds.name" class="dataset-card">
             <div class="dataset-header">
-              <div class="dataset-info">
-                <span class="dataset-name">{{ ds.name }}</span>
-                <el-tag size="small" type="info">{{ ds.createdBy }}</el-tag>
-                <el-tag :type="ds.preprocessed?'success':'info'" size="small">{{ ds.preprocessed?'已预处理':'未预处理' }}</el-tag>
-                <el-button v-if="!ds.preprocessed" size="small" type="warning" :loading="processingStatus[ds.name]" @click="handlePreprocessDataset(ds.name)">预处理</el-button>
-              </div>
-              <div class="header-actions">
-                <el-button size="small" type="primary" plain @click="addPendingRecord(ds.name)">+ 新增训练</el-button>
-                <el-button size="small" type="danger" @click="handleDeleteDataset(ds.name)">删除数据集</el-button>
-              </div>
+              <div class="dataset-info"><span class="dataset-name">{{ ds.name }}</span><el-tag size="small" type="info">{{ ds.createdBy }}</el-tag><el-tag :type="ds.preprocessed?'success':'info'" size="small">{{ ds.preprocessed?'已预处理':'未预处理' }}</el-tag><el-button v-if="!ds.preprocessed" size="small" type="warning" :loading="processingStatus[ds.name]" @click="handlePreprocessDataset(ds.name)">预处理</el-button></div>
+              <div class="header-actions"><el-button size="small" type="primary" plain @click="addPendingRecord(ds.name)">+ 新增训练</el-button><el-button size="small" type="danger" @click="handleDeleteDataset(ds.name)">删除数据集</el-button></div>
             </div>
             <div class="dataset-records" style="overflow-x:auto">
-              <table class="records-table">
-                <thead>
-                  <tr>
-                    <th class="col-priority">优先级(1最高)</th>
-                    <th class="col-epoch">Epochs</th>
-                    <th class="col-imgsz">Imgsz</th>
-                    <th class="col-tstatus">训练状态</th>
-                    <th class="col-estatus">测试状态</th>
-                    <th class="col-action">操作</th>
-                  </tr>
-                </thead>
+              <table class="records-table"><thead><tr><th class="col-priority">优先级</th><th class="col-epoch">Epochs</th><th class="col-imgsz">Imgsz</th><th class="col-tstatus">训练状态</th><th class="col-estatus">测试状态</th><th class="col-action">操作</th></tr></thead>
                 <tbody>
                   <tr v-for="rec in getDatasetRecords(ds.name)" :key="rec.recordName">
                     <td><el-input-number v-if="isEditable(rec)" v-model="rec.priority" :min="1" :max="10" size="small" style="width:72px" /><span v-else class="param-fixed">{{ rec.priority||5 }}</span></td>
                     <td><span class="param-fixed">{{ rec.epochs }}</span></td>
                     <td><span class="param-fixed">{{ rec.imgsz }}</span></td>
-                    <td>
-                      <div class="status-cell"><el-progress v-if="rec.trainStatus==='RUNNING'" :percentage="rec.trainProgress||0" :stroke-width="18" :text-inside="true" :format="p=>p+'%'" style="width:110px" /><el-tag v-else :type="getStatusClass(rec.trainStatus)" size="small">{{ getStatusText(rec.trainStatus,'train') }}</el-tag></div>
-                    </td>
+                    <td><div class="status-cell"><el-progress v-if="rec.trainStatus==='RUNNING'" :percentage="rec.trainProgress||0" :stroke-width="18" :text-inside="true" :format="p=>p+'%'" style="width:110px" /><el-tag v-else :type="getStatusClass(rec.trainStatus)" size="small">{{ getStatusText(rec.trainStatus,'train') }}</el-tag></div></td>
                     <td><el-tag :type="getStatusClass(rec.testStatus)" size="small">{{ getStatusText(rec.testStatus,'test') }}</el-tag></td>
-                    <td>
-                      <div class="record-actions">
-                        <el-button v-if="isEditable(rec)" size="small" type="primary" :disabled="!ds.preprocessed" @click="handleTrainRecord(rec)">训练</el-button>
-                        <el-button v-if="hasTrainLog(rec)" size="small" plain @click="handleViewTrainLog(rec)">训练日志</el-button>
-                        <el-button v-if="rec.trainStatus==='COMPLETED'" size="small" type="success" @click="showSaveModelDialog(rec)">保存模型</el-button>
-                        <el-button v-if="rec.trainStatus==='COMPLETED' && rec.testStatus!=='COMPLETED' && rec.testStatus!=='RUNNING'" size="small" type="success" @click="handleTestRecord(rec)">测试</el-button>
-                        <el-button v-if="hasTestLog(rec)" size="small" plain @click="handleViewTestLog(rec)">测试日志</el-button>
-                        <el-button v-if="canDeleteRecord(rec)" size="small" type="danger" @click="handleDeleteRecord(rec)">删除</el-button>
-                      </div>
-                    </td>
+                    <td><div class="record-actions">
+                      <el-button v-if="isEditable(rec)" size="small" type="primary" :disabled="!ds.preprocessed" @click="handleTrainRecord(rec)">训练</el-button>
+                      <el-button v-if="hasTrainLog(rec)" size="small" plain @click="handleViewTrainLog(rec)">训练日志</el-button>
+                      <el-button v-if="rec.trainStatus==='COMPLETED'" size="small" type="success" @click="showSaveModelDialog(rec)">保存模型</el-button>
+                      <el-button v-if="rec.trainStatus==='COMPLETED' && rec.testStatus!=='COMPLETED' && rec.testStatus!=='RUNNING'" size="small" type="success" @click="handleTestRecord(rec)">测试</el-button>
+                      <el-button v-if="hasTestLog(rec)" size="small" plain @click="handleViewTestLog(rec)">测试日志</el-button>
+                      <el-button v-if="canDeleteRecord(rec)" size="small" type="danger" @click="handleDeleteRecord(rec)">删除</el-button>
+                    </div></td>
                   </tr>
                   <tr v-for="pending in getPendingRecords(ds.name)" :key="pending.key">
                     <td><el-input-number v-model="pending.priority" :min="1" :max="10" size="small" style="width:72px" /></td>
@@ -105,12 +84,7 @@
                     <td><el-input-number v-model="pending.imgsz" :min="32" :max="1280" :step="32" size="small" style="width:90px" /></td>
                     <td><el-tag type="info" size="small">未训练</el-tag></td>
                     <td><el-tag type="info" size="small">未测试</el-tag></td>
-                    <td>
-                      <div class="record-actions">
-                        <el-button size="small" type="primary" :disabled="!ds.preprocessed" @click="handleTrainPending(ds.name,pending)">训练</el-button>
-                        <el-button size="small" type="danger" @click="removePendingRecord(ds.name,pending.key)">删除</el-button>
-                      </div>
-                    </td>
+                    <td><div class="record-actions"><el-button size="small" type="primary" :disabled="!ds.preprocessed" @click="handleTrainPending(ds.name,pending)">训练</el-button><el-button size="small" type="danger" @click="removePendingRecord(ds.name,pending.key)">删除</el-button></div></td>
                   </tr>
                 </tbody>
               </table>
@@ -134,59 +108,78 @@
             <div class="log-grid"><div v-for="(log,name) in testLogs" :key="'test-'+name" class="log-item"><div class="log-header"><el-tag size="small" type="success">{{ name }}</el-tag><el-button type="danger" size="small" link @click="closeTestLog(name)">关闭</el-button></div><div class="log-container" :ref="el=>setLogRef(name,'test',el)"><pre class="log-content">{{ log }}</pre></div></div></div>
           </el-card>
         </div>
+      </div>
 
-        <el-dialog title="保存模型" v-model="saveModelDialogVisible" width="480px" :close-on-click-modal="false">
-          <el-form :model="saveModelForm" label-width="80px">
-            <el-form-item label="记录"><el-tag type="success">{{ saveModelForm.recordName }}</el-tag></el-form-item>
-            <el-form-item label="类型"><el-radio-group v-model="saveModelForm.modelType"><el-radio label="best">最佳模型(best.pt)</el-radio><el-radio label="last">最后模型(last.pt)</el-radio></el-radio-group></el-form-item>
-            <el-form-item label="保存路径"><div class="save-path-row"><el-input v-model="saveModelForm.savePath" placeholder="默认项目saved_models目录" /><el-button type="info" @click="browseFolder('请选择模型保存路径','save')">浏览</el-button></div></el-form-item>
-          </el-form>
-          <template #footer><el-button type="primary" @click="confirmSaveModel" :loading="saveModelLoading">保存</el-button></template>
-        </el-dialog>
+      <!-- ==================== 操作日志页面 ==================== -->
+      <div v-show="activePage==='logs'" class="page-logs">
+        <div class="page-header"><h2>操作日志</h2></div>
+        <el-card shadow="hover" class="filter-card">
+          <div class="filter-row">
+            <div class="filter-item"><span class="filter-label">用户</span><el-input v-model="logFilter.username" placeholder="搜索用户名" clearable size="small" style="width:140px" /></div>
+            <div class="filter-item"><span class="filter-label">操作</span><el-select v-model="logFilter.action" placeholder="全部" clearable size="small" style="width:150px"><el-option v-for="a in logActions" :key="a" :label="a" :value="a" /></el-select></div>
+            <div class="filter-item"><span class="filter-label">起始</span><el-date-picker v-model="logFilter.startTime" type="datetime" placeholder="起始时间" size="small" format="YYYY-MM-DD HH:mm" value-format="YYYY-MM-DDTHH:mm:ss" style="width:200px" /></div>
+            <div class="filter-item"><span class="filter-label">结束</span><el-date-picker v-model="logFilter.endTime" type="datetime" placeholder="结束时间" size="small" format="YYYY-MM-DD HH:mm" value-format="YYYY-MM-DDTHH:mm:ss" style="width:200px" /></div>
+            <el-button type="primary" size="small" @click="fetchFilteredLogs">查询</el-button>
+            <el-button size="small" @click="resetLogFilter">重置</el-button>
+          </div>
+        </el-card>
+        <el-card shadow="hover" style="margin-top:14px">
+          <el-table :data="pagedLogList" stripe size="small" class="fixed-table" max-height="600" :default-sort="{prop:'createdAt',order:'descending'}">
+            <el-table-column prop="username" label="用户" width="100" /><el-table-column prop="action" label="操作" width="140"><template #default="{row}"><el-tag :type="getActionTagType(row.action)" size="small">{{ row.action }}</el-tag></template></el-table-column><el-table-column prop="target" label="目标" min-width="140" show-overflow-tooltip /><el-table-column prop="detail" label="详情" min-width="200" show-overflow-tooltip /><el-table-column prop="createdAt" label="时间" width="170" sortable />
+          </el-table>
+          <div class="pagination-container" style="margin-top:12px"><el-pagination v-model:current-page="logPage" :page-size="logPageSize" :total="filteredLogs.length" :page-sizes="[20,50,100]" layout="total,sizes,prev,pager,next" @size-change="logPageSize=$event;logPage=1" @current-change="logPage=$event" small /></div>
+        </el-card>
+      </div>
 
-        <div class="bottom-section" v-if="isAdmin">
-          <el-card shadow="hover"><template #header><span class="card-title">用户管理</span></template>
-            <el-table :data="userList" stripe size="small" class="fixed-table">
-              <el-table-column prop="username" label="用户名" min-width="100" /><el-table-column prop="role" label="角色" min-width="100" align="center"><template #default="s"><el-tag :type="s.row.role==='ROOT'?'danger':s.row.role==='ADMIN'?'warning':'info'" size="small">{{ s.row.role }}</el-tag></template></el-table-column>
-              <el-table-column prop="createdAt" label="创建时间" min-width="160" /><el-table-column label="操作" min-width="200" align="center">
-                <template #default="s"><el-button v-if="canEditUserRole(s.row)" size="small" @click="showRoleDialog(s.row)">修改角色</el-button><el-button v-if="s.row.role!=='ROOT'&&currentUser.role==='ROOT'" size="small" type="danger" @click="handleDeleteUser(s.row)">删除</el-button></template>
-              </el-table-column>
-            </el-table>
-            <div style="margin-top:12px"><el-button size="small" type="primary" @click="showAddUserDialog=true">添加用户</el-button></div>
-          </el-card>
-        </div>
+      <!-- ==================== 用户管理页面 ==================== -->
+      <div v-show="activePage==='users'" class="page-users">
+        <div class="page-header"><h2>用户管理</h2></div>
+        <el-card shadow="hover" class="filter-card">
+          <div class="filter-row">
+            <div class="filter-item"><span class="filter-label">搜索</span><el-input v-model="userSearch" placeholder="搜索用户名" clearable size="small" style="width:180px" @input="fetchFilteredUsers" /></div>
+            <div class="filter-item"><span class="filter-label">角色</span><el-select v-model="userRoleFilter" placeholder="全部" clearable size="small" style="width:120px" @change="fetchFilteredUsers"><el-option label="ROOT" value="ROOT" /><el-option label="ADMIN" value="ADMIN" /><el-option label="USER" value="USER" /></el-select></div>
+            <el-button type="primary" size="small" @click="showAddUserDialog=true">添加用户</el-button>
+          </div>
+        </el-card>
+        <el-card shadow="hover" style="margin-top:14px">
+          <el-table :data="filteredUserList" stripe size="small" class="fixed-table">
+            <el-table-column prop="username" label="用户名" min-width="120" /><el-table-column prop="role" label="角色" min-width="100" align="center"><template #default="s"><el-tag :type="s.row.role==='ROOT'?'danger':s.row.role==='ADMIN'?'warning':'info'" size="small">{{ s.row.role }}</el-tag></template></el-table-column><el-table-column prop="createdAt" label="创建时间" min-width="170" /><el-table-column label="操作" min-width="180" align="center"><template #default="s"><el-button v-if="canEditUserRole(s.row)" size="small" @click="showRoleDialog(s.row)">修改角色</el-button><el-button v-if="s.row.role!=='ROOT'&&currentUser.role==='ROOT'" size="small" type="danger" @click="handleDeleteUser(s.row)">删除</el-button></template></el-table-column>
+          </el-table>
+        </el-card>
+      </div>
+    </main>
 
-        <div class="bottom-section">
-          <el-card shadow="hover"><template #header><span class="card-title">操作日志</span></template>
-            <el-table :data="operationLogs" stripe size="small" max-height="300" class="fixed-table">
-              <el-table-column prop="username" label="用户" min-width="80" /><el-table-column prop="action" label="操作" min-width="110" /><el-table-column prop="target" label="目标" min-width="130" /><el-table-column prop="detail" label="详情" min-width="180" /><el-table-column prop="createdAt" label="时间" min-width="160" />
-            </el-table>
-          </el-card>
-        </div>
+    <!-- ==================== 对话框 ==================== -->
+    <el-dialog title="保存模型" v-model="saveModelDialogVisible" width="480px" :close-on-click-modal="false">
+      <el-form :model="saveModelForm" label-width="80px">
+        <el-form-item label="记录"><el-tag type="success">{{ saveModelForm.recordName }}</el-tag></el-form-item>
+        <el-form-item label="类型"><el-radio-group v-model="saveModelForm.modelType"><el-radio label="best">最佳模型(best.pt)</el-radio><el-radio label="last">最后模型(last.pt)</el-radio></el-radio-group></el-form-item>
+        <el-form-item label="保存路径"><div class="save-path-row"><el-input v-model="saveModelForm.savePath" placeholder="默认项目saved_models目录" /><el-button type="info" @click="browseFolder('请选择模型保存路径','save')">浏览</el-button></div></el-form-item>
+      </el-form>
+      <template #footer><el-button type="primary" @click="confirmSaveModel" :loading="saveModelLoading">保存</el-button></template>
+    </el-dialog>
 
-        <el-dialog title="添加用户" v-model="showAddUserDialog" width="360px"><el-form :model="newUserForm" label-width="70px"><el-form-item label="用户名"><el-input v-model="newUserForm.username" /></el-form-item><el-form-item label="密码"><el-input v-model="newUserForm.password" type="password" /></el-form-item><el-form-item v-if="currentUser.role==='ROOT'" label="角色"><el-select v-model="newUserForm.role"><el-option label="普通用户" value="USER" /><el-option label="管理员" value="ADMIN" /></el-select></el-form-item><el-form-item v-else label="角色"><el-tag type="info">普通用户</el-tag></el-form-item></el-form><template #footer><el-button @click="showAddUserDialog=false">取消</el-button><el-button type="primary" @click="handleAddUser">创建</el-button></template></el-dialog>
+    <el-dialog title="添加用户" v-model="showAddUserDialog" width="360px"><el-form :model="newUserForm" label-width="70px"><el-form-item label="用户名"><el-input v-model="newUserForm.username" /></el-form-item><el-form-item label="密码"><el-input v-model="newUserForm.password" type="password" /></el-form-item><el-form-item v-if="currentUser.role==='ROOT'" label="角色"><el-select v-model="newUserForm.role"><el-option label="普通用户" value="USER" /><el-option label="管理员" value="ADMIN" /></el-select></el-form-item><el-form-item v-else label="角色"><el-tag type="info">普通用户</el-tag></el-form-item></el-form><template #footer><el-button @click="showAddUserDialog=false">取消</el-button><el-button type="primary" @click="handleAddUser">创建</el-button></template></el-dialog>
 
-        <el-dialog title="修改角色" v-model="showRoleDialogVisible" width="320px">
-          <el-form label-width="70px"><el-form-item label="用户"><strong>{{ roleEditTarget.username }}</strong></el-form-item><el-form-item label="新角色"><el-select v-model="roleEditNewRole"><el-option v-if="currentUser.role==='ROOT'" label="普通用户(USER)" value="USER" /><el-option v-if="currentUser.role==='ROOT'" label="管理员(ADMIN)" value="ADMIN" /><el-option v-if="currentUser.role==='ADMIN'" label="普通用户(USER)" value="USER" /></el-select></el-form-item></el-form>
-          <template #footer><el-button @click="showRoleDialogVisible=false">取消</el-button><el-button type="primary" @click="confirmRoleChange">确认</el-button></template>
-        </el-dialog>
+    <el-dialog title="修改角色" v-model="showRoleDialogVisible" width="320px">
+      <el-form label-width="70px"><el-form-item label="用户"><strong>{{ roleEditTarget.username }}</strong></el-form-item><el-form-item label="新角色"><el-select v-model="roleEditNewRole"><el-option v-if="currentUser.role==='ROOT'" label="普通用户(USER)" value="USER" /><el-option v-if="currentUser.role==='ROOT'" label="管理员(ADMIN)" value="ADMIN" /><el-option v-if="currentUser.role==='ADMIN'" label="普通用户(USER)" value="USER" /></el-select></el-form-item></el-form>
+      <template #footer><el-button @click="showRoleDialogVisible=false">取消</el-button><el-button type="primary" @click="confirmRoleChange">确认</el-button></template>
+    </el-dialog>
 
-        <el-dialog title="确认删除数据集" v-model="deleteConfirmVisible" width="360px"><p>确定删除数据集 <strong>{{ datasetToDelete }}</strong>？</p><p style="color:#f56c6c;font-size:13px">此操作将删除所有关联的训练记录、K8s Job/Pod、YAML文件、runs目录和日志文件。</p><template #footer><el-button @click="deleteConfirmVisible=false">取消</el-button><el-button type="danger" @click="confirmDelete">确认</el-button></template></el-dialog>
+    <el-dialog title="确认删除数据集" v-model="deleteConfirmVisible" width="360px"><p>确定删除数据集 <strong>{{ datasetToDelete }}</strong>？</p><p style="color:#f56c6c;font-size:13px">此操作将删除所有关联的训练记录、K8s Job/Pod、YAML文件、runs目录和日志文件。</p><template #footer><el-button @click="deleteConfirmVisible=false">取消</el-button><el-button type="danger" @click="confirmDelete">确认</el-button></template></el-dialog>
 
-        <el-dialog title="确认删除训练记录" v-model="deleteRecordConfirmVisible" width="360px"><p>确定删除训练记录 <strong>{{ recordToDelete }}</strong>？</p><p style="color:#f56c6c;font-size:13px">此操作将删除关联的K8s Job/Pod、YAML文件、runs目录和日志文件。</p><template #footer><el-button @click="deleteRecordConfirmVisible=false">取消</el-button><el-button type="danger" @click="confirmDeleteRecord">确认</el-button></template></el-dialog>
+    <el-dialog title="确认删除训练记录" v-model="deleteRecordConfirmVisible" width="360px"><p>确定删除训练记录 <strong>{{ recordToDelete }}</strong>？</p><p style="color:#f56c6c;font-size:13px">此操作将删除关联的K8s Job/Pod、YAML文件、runs目录和日志文件。</p><template #footer><el-button @click="deleteRecordConfirmVisible=false">取消</el-button><el-button type="danger" @click="confirmDeleteRecord">确认</el-button></template></el-dialog>
 
-        <el-dialog title="确认清空" v-model="cleanupConfirmVisible" width="400px"><p>确定<strong>清空全部数据</strong>？</p><p style="color:#f56c6c;font-size:13px">此操作将删除所有数据集、训练记录、K8s Job/YAML和操作日志，不可恢复。</p><template #footer><el-button @click="cleanupConfirmVisible=false">取消</el-button><el-button type="danger" @click="confirmCleanup" :loading="cleanupLoading">确认</el-button></template></el-dialog>
+    <el-dialog title="确认清空" v-model="cleanupConfirmVisible" width="400px"><p>确定<strong>清空全部数据</strong>？</p><p style="color:#f56c6c;font-size:13px">此操作将删除所有数据集、训练记录、K8s Job/YAML和操作日志，不可恢复。</p><template #footer><el-button @click="cleanupConfirmVisible=false">取消</el-button><el-button type="danger" @click="confirmCleanup" :loading="cleanupLoading">确认</el-button></template></el-dialog>
 
-        <el-dialog title="确认删除用户" v-model="deleteUserConfirmVisible" width="360px"><p>确定删除用户 <strong>{{ userToDelete.username }}</strong>？</p><p style="color:#f56c6c;font-size:13px">此操作不可恢复。</p><template #footer><el-button @click="deleteUserConfirmVisible=false">取消</el-button><el-button type="danger" @click="confirmDeleteUser">确认</el-button></template></el-dialog>
-      </main>
-    </div>
+    <el-dialog title="确认删除用户" v-model="deleteUserConfirmVisible" width="360px"><p>确定删除用户 <strong>{{ userToDelete.username }}</strong>？</p><p style="color:#f56c6c;font-size:13px">此操作不可恢复。</p><template #footer><el-button @click="deleteUserConfirmVisible=false">取消</el-button><el-button type="danger" @click="confirmDeleteUser">确认</el-button></template></el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, onMounted, nextTick, computed, watch, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { UploadFilled } from '@element-plus/icons-vue'
+import { UploadFilled, Monitor, Document, UserFilled } from '@element-plus/icons-vue'
 import axios from 'axios'
 
 const isLoggedIn=ref(false)
@@ -207,39 +200,54 @@ const showRoleDialogVisible=ref(false),roleEditTarget=ref({}),roleEditNewRole=re
 const deleteUserConfirmVisible=ref(false),userToDelete=ref({})
 const currentPage=ref(1),pageSize=ref(10),total=ref(0)
 const isDragOver=ref(false)
+const activePage=ref('main')
+
+const logFilter=reactive({username:'',action:'',startTime:'',endTime:''})
+const logActions=['ADD_DATASET','PREPROCESS','TRAIN','TEST','SAVE_MODEL','DELETE_DATASET','DELETE_RECORD','CONFIG_CHANGE','CREATE_USER','UPDATE_ROLE','DELETE_USER']
+const logPage=ref(1),logPageSize=ref(20)
+const userSearch=ref(''),userRoleFilter=ref('')
 
 const isAdmin=computed(()=>currentUser.role==='ROOT'||currentUser.role==='ADMIN')
 const pagedDatasets=computed(()=>{const s=(currentPage.value-1)*pageSize.value;return datasetList.value.slice(s,s+pageSize.value)})
 const api=computed(()=>axios.create({headers:{Authorization:`Bearer ${token.value}`}}))
 const showMsg=(msg,type='success')=>ElMessage({message:msg,type,duration:3000,center:true})
 
-/** 与后端一致：须含上级目录（浏览器拖拽常仅有文件夹名，不可用） */
+const filteredLogs=computed(()=>{let list=[...operationLogs.value];if(logFilter.username){const kw=logFilter.username.toLowerCase();list=list.filter(l=>l.username&&l.username.toLowerCase().includes(kw))}if(logFilter.action){list=list.filter(l=>l.action===logFilter.action)}if(logFilter.startTime){try{const s=new Date(logFilter.startTime);list=list.filter(l=>l.createdAt&&new Date(l.createdAt)>=s)}catch(e){}}if(logFilter.endTime){try{const e=new Date(logFilter.endTime);list=list.filter(l=>l.createdAt&&new Date(l.createdAt)<=e)}catch(e){}}return list})
+const pagedLogList=computed(()=>{const s=(logPage.value-1)*logPageSize.value;return filteredLogs.value.slice(s,s+logPageSize.value)})
+const filteredUserList=computed(()=>{let list=[...userList.value];if(userSearch.value){const kw=userSearch.value.toLowerCase();list=list.filter(u=>u.username.toLowerCase().includes(kw))}if(userRoleFilter.value){list=list.filter(u=>u.role===userRoleFilter.value)}return list})
+
 const looksLikeFullDatasetPath=(p)=>{if(!p||typeof p!=='string')return false;const t=p.trim();if(t.length<2)return false;if(/^[a-zA-Z]:[\\/]/.test(t))return t.length>3;if(t.startsWith('\\\\'))return t.split(/[\\/]/).filter(Boolean).length>=2;if(t.startsWith('/'))return t.split('/').filter(Boolean).length>=2;if(t.includes('\\'))return t.split(/[\\/]/).filter(Boolean).length>=2;if(t.includes('/'))return t.split('/').filter(Boolean).length>=2;return false}
-
 const canEditUserRole=(row)=>{if(!row||row.role==='ROOT')return false;if(currentUser.username===row.username)return false;if(currentUser.role==='ROOT')return true;if(currentUser.role==='ADMIN'&&row.role==='USER')return true;return false}
-
 const getDatasetRecords=(dataName)=>trainingRecords.value.filter(r=>r.dataName===dataName)
 const getPendingRecords=(dataName)=>pendingRecords.value[dataName]||[]
 const isEditable=(rec)=>rec.trainStatus==='IDLE'&&(!rec.trainJobId||rec.trainJobId==='')
 const hasTrainLog=(rec)=>rec.trainStatus!=='IDLE'||rec.trainJobId
 const hasTestLog=(rec)=>rec.testStatus&&rec.testStatus!=='IDLE'
 const canDeleteRecord=(rec)=>rec.trainStatus!=='RUNNING'&&rec.testStatus!=='RUNNING'
-
 const addPendingRecord=(dataName)=>{if(!pendingRecords.value[dataName])pendingRecords.value[dataName]=[];const k='pending-'+Date.now();pendingRecords.value[dataName].push({key:k,epochs:savedDefaultEpochs.value,imgsz:savedDefaultImgsz.value,priority:5})}
 const removePendingRecord=(dataName,key)=>{if(pendingRecords.value[dataName])pendingRecords.value[dataName]=pendingRecords.value[dataName].filter(r=>r.key!==key)}
 
+const switchToLogs=()=>{activePage.value='logs';loadOperationLogs()}
+const switchToUsers=()=>{activePage.value='users';loadUsers()}
+
 const handleLogin=async()=>{if(loginLoading.value)return;loginLoading.value=true;loginError.value='';try{const r=await axios.post('/api/auth/login',loginForm);token.value=r.data.token;currentUser.username=r.data.username;currentUser.role=r.data.role;isLoggedIn.value=true;localStorage.setItem('token',token.value);localStorage.setItem('username',currentUser.username);localStorage.setItem('role',currentUser.role);onLoginSuccess()}catch(e){loginError.value=e.response?.data?.message||'登录失败'}finally{loginLoading.value=false}}
-const handleLogout=()=>{token.value='';currentUser.username='';currentUser.role='';isLoggedIn.value=false;localStorage.removeItem('token');localStorage.removeItem('username');localStorage.removeItem('role');stopAllPolling();datasetList.value=[];trainingRecords.value=[];userList.value=[];operationLogs.value=[];Object.keys(pendingRecords.value).forEach(k=>delete pendingRecords.value[k]);Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k]);Object.keys(closedLogs.value).forEach(k=>delete closedLogs.value[k]);Object.keys(processingStatus.value).forEach(k=>delete processingStatus.value[k]);Object.keys(testLoadingStatus.value).forEach(k=>delete testLoadingStatus.value[k]);currentPage.value=1;total.value=0}
+const handleLogout=()=>{token.value='';currentUser.username='';currentUser.role='';isLoggedIn.value=false;localStorage.removeItem('token');localStorage.removeItem('username');localStorage.removeItem('role');stopAllPolling();datasetList.value=[];trainingRecords.value=[];userList.value=[];operationLogs.value=[];Object.keys(pendingRecords.value).forEach(k=>delete pendingRecords.value[k]);Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k]);Object.keys(closedLogs.value).forEach(k=>delete closedLogs.value[k]);Object.keys(processingStatus.value).forEach(k=>delete processingStatus.value[k]);Object.keys(testLoadingStatus.value).forEach(k=>delete testLoadingStatus.value[k]);currentPage.value=1;total.value=0;activePage.value='main'}
 
 const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){maxConcurrentTasks.value=r.data.maxConcurrentTasks;savedMaxConcurrentTasks.value=r.data.maxConcurrentTasks;defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz}}catch(e){}}
 const loadTrainingRecords=async()=>{try{trainingRecords.value=(await api.value.get('/api/training-records')).data}catch(e){}}
-const loadUsers=async()=>{try{userList.value=(await api.value.get('/api/users')).data}catch(e){}}
-const loadOperationLogs=async()=>{try{operationLogs.value=(await api.value.get('/api/users/logs')).data}catch(e){}}
+const loadUsers=async()=>{try{const params={};if(userSearch.value)params.search=userSearch.value;if(userRoleFilter.value)params.role=userRoleFilter.value;userList.value=(await api.value.get('/api/users',{params})).data}catch(e){}}
+const loadOperationLogs=async()=>{try{const params={};if(logFilter.username)params.username=logFilter.username;if(logFilter.action)params.action=logFilter.action;if(logFilter.startTime)params.startTime=logFilter.startTime;if(logFilter.endTime)params.endTime=logFilter.endTime;operationLogs.value=(await api.value.get('/api/users/logs',{params})).data}catch(e){}}
 const refreshDatasets=async()=>{try{const r=await api.value.get('/api/datasets');datasetList.value=r.data;total.value=r.data.length}catch(e){if(e.response?.status===401)handleLogout()}}
 
-const handleAddDataset=async()=>{if(!form.inputDir){showMsg('请输入数据路径','warning');return}const id=form.inputDir.trim().replace(/^["']|["']$/g,'');if(!looksLikeFullDatasetPath(id)){showMsg('路径无效：请填写完整路径（含上级目录），不可仅为文件夹名称','warning');return}const dn=id.split(/[/\\]/).pop();currentStep.value='addDataset';try{await api.value.post('/api/datasets',{inputDir:id});await refreshDatasets();await loadTrainingRecords();showMsg(`数据集 ${dn} 添加成功`)}catch(e){showMsg(`失败: ${e.response?.data?.message||e.message}`,'error')}finally{currentStep.value='';form.inputDir=''}}
+const fetchFilteredLogs=async()=>{logPage.value=1;await loadOperationLogs()}
+const resetLogFilter=()=>{logFilter.username='';logFilter.action='';logFilter.startTime='';logFilter.endTime='';logPage.value=1;loadOperationLogs()}
+const fetchFilteredUsers=async()=>{await loadUsers()}
 
-const handleDrop=async(e)=>{isDragOver.value=false;const files=e.dataTransfer.files;if(!files||files.length===0)return;const dirs=[];for(let i=0;i<files.length;i++){const f=files[i];const fp=f.path||f.name;if(fp&&!dirs.includes(fp))dirs.push(fp)}const ok=dirs.filter(looksLikeFullDatasetPath);const bad=dirs.filter(d=>!looksLikeFullDatasetPath(d));if(ok.length===0){showMsg(bad.length?'无法识别完整路径（浏览器拖拽通常只有文件夹名）。请使用「浏览」或手动粘贴完整路径，或使用支持 path 的桌面客户端。':'请拖拽文件夹','warning');return}if(bad.length)showMsg(`已跳过 ${bad.length} 个无效路径（需完整路径）`,'warning');currentStep.value='addDataset';try{const r=await api.value.post('/api/datasets/batch',{dirs:ok});const d=r.data;await refreshDatasets();await loadTrainingRecords();showMsg(`成功添加 ${d.added} 个数据集${d.skipped>0?'，跳过 '+d.skipped+' 个已存在':''}`)}catch(e){showMsg(`批量添加失败: ${e.response?.data?.message||e.message}`,'error')}finally{currentStep.value=''}}
+const getActionTagType=(action)=>{const map={ADD_DATASET:'success',PREPROCESS:'warning',TRAIN:'primary',TEST:'primary',SAVE_MODEL:'success',DELETE_DATASET:'danger',DELETE_RECORD:'danger',CONFIG_CHANGE:'info',CREATE_USER:'success',UPDATE_ROLE:'warning',DELETE_USER:'danger'};return map[action]||'info'}
+
+const handleAddDataset=async()=>{if(!form.inputDir){showMsg('请输入数据路径','warning');return}const id=form.inputDir.trim().replace(/^["']|["']$/g,'');if(!looksLikeFullDatasetPath(id)){showMsg('路径无效：请填写完整路径','warning');return}const dn=id.split(/[/\\]/).pop();currentStep.value='addDataset';try{await api.value.post('/api/datasets',{inputDir:id});await refreshDatasets();await loadTrainingRecords();showMsg(`数据集 ${dn} 添加成功`)}catch(e){showMsg(`失败: ${e.response?.data?.message||e.message}`,'error')}finally{currentStep.value='';form.inputDir=''}}
+
+const handleDrop=async(e)=>{isDragOver.value=false;const files=e.dataTransfer.files;if(!files||files.length===0)return;const dirs=[];for(let i=0;i<files.length;i++){const f=files[i];const fp=f.path||f.name;if(fp&&!dirs.includes(fp))dirs.push(fp)}const ok=dirs.filter(looksLikeFullDatasetPath);const bad=dirs.filter(d=>!looksLikeFullDatasetPath(d));if(ok.length===0){showMsg(bad.length?'无法识别完整路径，请使用浏览或手动粘贴':'请拖拽文件夹','warning');return}if(bad.length)showMsg(`已跳过 ${bad.length} 个无效路径`,'warning');currentStep.value='addDataset';try{const r=await api.value.post('/api/datasets/batch',{dirs:ok});const d=r.data;await refreshDatasets();await loadTrainingRecords();showMsg(`成功添加 ${d.added} 个数据集${d.skipped>0?'，跳过 '+d.skipped+' 个已存在':''}`)}catch(e){showMsg(`批量添加失败: ${e.response?.data?.message||e.message}`,'error')}finally{currentStep.value=''}}
 
 const browseFolder=async(title,target)=>{try{const r=await axios.get('/api/dialog/folder',{params:{title},headers:{Authorization:`Bearer ${token.value}`}});if(r.data.status==='success'&&r.data.path){if(target==='input')form.inputDir=r.data.path;else if(target==='save')saveModelForm.savePath=r.data.path}}catch(e){showMsg('打开文件夹失败','error')}}
 
@@ -305,14 +313,25 @@ onUnmounted(()=>{stopAllPolling()})
 .login-card{background:rgba(255,255,255,.95);border-radius:16px;padding:40px;width:380px;box-shadow:0 20px 60px rgba(0,0,0,.3);z-index:1}
 .login-header{text-align:center;margin-bottom:30px}.login-header h2{margin:12px 0 0;color:#303133}
 .login-error{color:#f56c6c;text-align:center;margin-top:12px;font-size:13px}
-.app-container{min-height:100vh;background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);position:relative;overflow-x:hidden}
+
+.app-layout{display:flex;min-height:100vh;background:#f0f2f5;position:relative}
 .bg-decoration{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:0;overflow:hidden}
-.bg-circle{position:absolute;border-radius:50%;opacity:.08}.bg-circle-1{width:600px;height:600px;background:#409eff;top:-200px;right:-100px}.bg-circle-2{width:400px;height:400px;background:#67c23a;bottom:-100px;left:-80px}.bg-circle-3{width:300px;height:300px;background:#e6a23c;top:50%;left:50%;transform:translate(-50%,-50%)}
-.content-wrapper{position:relative;z-index:1;padding:24px;max-width:1600px;margin:0 auto}
-.app-header{margin-bottom:24px}.header-content{display:flex;align-items:center;justify-content:space-between}
-.logo-area{display:flex;align-items:center;gap:14px}
-.logo-icon{width:42px;height:42px;background:linear-gradient(135deg,#409eff,#67c23a);border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:22px;font-weight:800;flex-shrink:0}
-.app-header h1{margin:0;font-size:22px;color:#fff;font-weight:700}.header-right{display:flex;align-items:center;gap:10px}.username{color:#fff;font-size:14px}
+.bg-circle{position:absolute;border-radius:50%;opacity:.06}.bg-circle-1{width:600px;height:600px;background:#409eff;top:-200px;right:-100px}.bg-circle-2{width:400px;height:400px;background:#67c23a;bottom:-100px;left:-80px}.bg-circle-3{width:300px;height:300px;background:#e6a23c;top:50%;left:50%;transform:translate(-50%,-50%)}
+
+.sidebar{width:200px;background:linear-gradient(180deg,#1a1a2e,#16213e);color:#fff;display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:10;box-shadow:2px 0 12px rgba(0,0,0,.15)}
+.sidebar-logo{display:flex;align-items:center;gap:10px;padding:20px 18px;border-bottom:1px solid rgba(255,255,255,.1)}
+.logo-icon{width:36px;height:36px;background:linear-gradient(135deg,#409eff,#67c23a);border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:18px;font-weight:800;flex-shrink:0}
+.logo-text{font-size:18px;font-weight:700;letter-spacing:1px}
+.sidebar-nav{flex:1;padding:12px 0}
+.nav-item{display:flex;align-items:center;gap:10px;padding:12px 20px;cursor:pointer;transition:all .2s;color:rgba(255,255,255,.65);font-size:14px;border-left:3px solid transparent}
+.nav-item:hover{background:rgba(255,255,255,.08);color:#fff}
+.nav-item.active{background:rgba(64,158,255,.15);color:#409eff;border-left-color:#409eff}
+.sidebar-footer{padding:14px 16px;border-top:1px solid rgba(255,255,255,.1)}
+.user-badge{display:flex;align-items:center;gap:6px;margin-bottom:8px}.user-name{font-size:13px;color:rgba(255,255,255,.8)}
+.footer-actions{display:flex;gap:6px}
+
+.main-content{margin-left:200px;flex:1;padding:20px 28px;position:relative;z-index:1;min-height:100vh}
+.page-header{margin-bottom:18px}.page-header h2{margin:0;font-size:20px;color:#303133;font-weight:700}
 
 .top-section{display:flex;gap:14px;margin-bottom:16px}.top-card{flex:1;min-width:0}
 .dataset-card-top{flex:3}.config-card-top{flex:2}
@@ -345,13 +364,16 @@ onUnmounted(()=>{stopAllPolling()})
 .log-container{max-height:350px;overflow-y:auto;padding:10px 14px;background:#0d1117}
 .log-content{white-space:pre-wrap;font-family:'Cascadia Code','Fira Code','Consolas',monospace;font-size:12px;color:#c9d1d9;margin:0;line-height:1.6}
 
-.save-path-row{display:flex;gap:8px;width:100%}.save-path-row .el-input{flex:1}.bottom-section{margin-top:14px}
+.filter-card :deep(.el-card__body){padding:14px 18px}
+.filter-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.filter-item{display:flex;align-items:center;gap:6px}.filter-label{font-size:13px;color:#606266;white-space:nowrap}
 
+.save-path-row{display:flex;gap:8px;width:100%}.save-path-row .el-input{flex:1}
 .fixed-table{width:100%}
 
 :deep(.el-card){border-radius:12px;border:none}:deep(.el-card__header){padding:12px 18px;border-bottom:1px solid #ebeef5}:deep(.el-card__body){padding:14px 18px}
 :deep(.el-table){font-size:13px}:deep(.el-table th.el-table__cell){background-color:#f5f7fa!important;text-align:center!important}:deep(.el-dialog){border-radius:12px}
 
 @media(max-width:1000px){.top-section{flex-direction:column}.dataset-card-top,.config-card-top{flex:auto}.config-row{gap:8px}}
-@media(max-width:800px){.content-wrapper{padding:10px}.app-header h1{font-size:16px}.log-grid{grid-template-columns:1fr}.input-row{flex-wrap:wrap}}
+@media(max-width:800px){.main-content{padding:10px;margin-left:180px}.log-grid{grid-template-columns:1fr}.input-row{flex-wrap:wrap}.filter-row{gap:8px}}
 </style>

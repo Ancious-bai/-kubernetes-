@@ -54,7 +54,7 @@ public class AuthService {
         return jwtUtil.generateToken(user.getId(), user.getUsername(), user.getRole());
     }
 
-    public User register(String username, String password, String role, String operatorRole) {
+    public User register(String username, String password, String role, String operatorUsername, String operatorRole) {
         if (!"ROOT".equals(operatorRole) && !"ADMIN".equals(operatorRole)) {
             throw new IllegalArgumentException("无权限创建用户");
         }
@@ -66,7 +66,7 @@ public class AuthService {
         }
         User user = new User(username, passwordEncoder.encode(password), role);
         User saved = userRepository.save(user);
-        logOperation(null, operatorRole, "CREATE_USER", username, "创建用户，角色: " + role);
+        logOperation(null, operatorUsername, "CREATE_USER", username, "创建用户，角色: " + role);
         return saved;
     }
 

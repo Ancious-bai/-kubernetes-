@@ -21,14 +21,30 @@ public class UserController {
     private AuthService authService;
 
     @GetMapping
-    public ResponseEntity<?> getAllUsers(HttpServletRequest httpRequest) {
-        String role = (String) httpRequest.getAttribute("role");
-        if (!authService.isAdminOrAbove(role)) {
+    public ResponseEntity<?> getAllUsers(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String role,
+            HttpServletRequest httpRequest) {
+        String currentRole = (String) httpRequest.getAttribute("role");
+        if (!authService.isAdminOrAbove(currentRole)) {
             Map<String, String> response = new HashMap<>();
             response.put("message", "无权限查看用户列表");
             return ResponseEntity.status(403).body(response);
         }
         List<User> users = authService.getAllUsers();
+
+        if (search != null && !search.trim().isEmpty()) {
+            String keyword = search.trim().toLowerCase();
+            users = users.stream()
+                    .filter(u -> u.getUsername().toLowerCase().contains(keyword))
+                    .collect(Collectors.toList());
+        }
+        if (role != null && !role.trim().isEmpty()) {
+            users = users.stream()
+                    .filter(u -> role.equals(u.getRole()))
+                    .collect(Collectors.toList());
+        }
+
         return ResponseEntity.ok(users);
     }
 
@@ -69,18 +85,23 @@ public class UserController {
     }
 
     @GetMapping("/logs")
-    public ResponseEntity<List<OperationLog>> getOperationLogs(HttpServletRequest httpRequest) {
+    public ResponseEntity<List<OperationLog>> getOperationLogs(
+            @RequestParam(required = false) String username,
+            @RequestParam(required = false) String action,
+            @RequestParam(required = false) String startTime,
+            @RequestParam(required = false) String endTime,
+            HttpServletRequest httpRequest) {
         String role = (String) httpRequest.getAttribute("role");
-        String username = (String) httpRequest.getAttribute("username");
+        String currentUsername = (String) httpRequest.getAttribute("username");
 
-        List<OperationLog> logs = authService.getOperationLogs(role, username);
+        List<OperationLog> logs = authService.getOperationLogs(role, currentUsername);
 
         if ("ADMIN".equals(role)) {
             logs = logs.stream()
                     .filter(log -> {
                         String logUser = log.getUsername();
                         if (logUser == null || logUser.isEmpty()) return true;
-                        if (username.equals(logUser)) return true;
+                        if (currentUsername.equals(logUser)) return true;
                         try {
                             User u = authService.getUserByUsername(logUser);
                             return u != null && "USER".equals(u.getRole());
@@ -89,6 +110,36 @@ public class UserController {
                         }
                     })
                     .collect(Collectors.toList());
+        }
+
+        if (username != null && !username.trim().isEmpty()) {
+            String kw = username.trim().toLowerCase();
+            logs = logs.stream()
+                    .filter(log -> log.getUsername() != null && log.getUsername().toLowerCase().contains(kw))
+                    .collect(Collectors.toList());
+        }
+        if (action != null && !action.trim().isEmpty()) {
+            logs = logs.stream()
+                    .filter(log -> action.equals(log.getAction()))
+                    .collect(Collectors.toList());
+        }
+        if (startTime != null && !startTime.trim().isEmpty()) {
+            try {
+                java.time.LocalDateTime start = java.time.LocalDateTime.parse(startTime);
+                logs = logs.stream()
+                        .filter(log -> log.getCreatedAt() != null && !log.getCreatedAt().isBefore(start))
+                        .collect(Collectors.toList());
+            } catch (Exception e) {
+            }
+        }
+        if (endTime != null && !endTime.trim().isEmpty()) {
+            try {
+                java.time.LocalDateTime end = java.time.LocalDateTime.parse(endTime);
+                logs = logs.stream()
+                        .filter(log -> log.getCreatedAt() != null && !log.getCreatedAt().isAfter(end))
+                        .collect(Collectors.toList());
+            } catch (Exception e) {
+            }
         }
 
         return ResponseEntity.ok(logs);
