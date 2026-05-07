@@ -24,10 +24,18 @@ public class YoloService {
 
     private final Map<String, JobStatus> jobStatusMap = new ConcurrentHashMap<>();
     private final ExecutorService executorService = Executors.newCachedThreadPool();
-    private static final String PROJECT_ROOT = "E:\\Ancious\\Desktop\\毕业设计\\Code";
-    private static final String PREPROCESS_SCRIPT = PROJECT_ROOT + "\\preprocess.py";
-    private static final String GENERATE_YAML_SCRIPT = PROJECT_ROOT + "\\generate_k8s_job_yaml.py";
-    private static final String LOGS_DIR = PROJECT_ROOT + "\\logs";
+    private static final String PROJECT_ROOT;
+    private static final String PREPROCESS_SCRIPT;
+    private static final String GENERATE_YAML_SCRIPT;
+    private static final String LOGS_DIR;
+
+    static {
+        String path = System.getProperty("user.dir").replace("/", "\\");
+        PROJECT_ROOT = new java.io.File(path).getParentFile().getAbsolutePath().replace("/", "\\");
+        PREPROCESS_SCRIPT = PROJECT_ROOT + "\\preprocess.py";
+        GENERATE_YAML_SCRIPT = PROJECT_ROOT + "\\generate_k8s_job_yaml.py";
+        LOGS_DIR = PROJECT_ROOT + "\\logs";
+    }
 
     @Autowired
     private DatasetRepository datasetRepository;
