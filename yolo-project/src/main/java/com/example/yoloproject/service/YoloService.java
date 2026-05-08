@@ -27,7 +27,7 @@ public class YoloService {
     private static final String PROJECT_ROOT;
     private static final String PREPROCESS_SCRIPT;
     private static final String GENERATE_YAML_SCRIPT;
-    private static final String LOGS_DIR;
+    public static final String LOGS_DIR;
 
     static {
         String path = System.getProperty("user.dir").replace("/", "\\");
@@ -158,11 +158,6 @@ public class YoloService {
                 int exitCode = process.waitFor();
 
                 if (exitCode == 0) {
-                    logBuilder.append("训练状态: Running\n");
-                    logBuilder.append("Pod创建中...\n");
-                    logBuilder.append("kubectl输出: ").append(processOutput);
-                    updateStatus(jobId, "RUNNING", 0, logBuilder.toString());
-
                     String podName = null;
                     for (int i = 0; i < 20; i++) {
                         try {
@@ -172,10 +167,6 @@ public class YoloService {
                             String podLine = podReader.readLine();
                             if (podLine != null && podLine.startsWith("pod/")) {
                                 podName = podLine.substring(4);
-                                logBuilder.append("Pod创建成功: ").append(podName).append("\n");
-                                logBuilder.append("开始获取实时日志...\n");
-                                updateStatus(jobId, "RUNNING", 0, logBuilder.toString(), podName);
-
                                 final String finalPodName = podName;
                                 trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
                                     r.setTrainPodName(finalPodName);
@@ -190,25 +181,21 @@ public class YoloService {
                     if (podName != null) {
                         final String finalPodName = podName;
                         int progress = 0;
-                        int trainLogSnapshotTick = 0;
 
                         while (true) {
                             try {
-                                Thread.sleep(1000);
+                                Thread.sleep(2000);
 
-                                Process logProcess = new ProcessBuilder("kubectl", "logs", finalPodName).start();
+                                Process logProcess = new ProcessBuilder("kubectl", "logs", finalPodName, "--tail=10").start();
                                 BufferedReader logReader = new BufferedReader(new InputStreamReader(logProcess.getInputStream(), "UTF-8"));
-                                StringBuilder currentLogs = new StringBuilder();
+                                StringBuilder tailLog = new StringBuilder();
                                 String line;
                                 while ((line = logReader.readLine()) != null) {
-                                    currentLogs.append(line).append("\n");
+                                    tailLog.append(line).append("\n");
                                 }
                                 logProcess.waitFor();
 
-                                String fullLog = "训练状态: Running\nPod创建成功: " + finalPodName + "\n开始获取实时日志...\n" + currentLogs.toString();
-
-                                String logStr = currentLogs.toString();
-                                int parsedProgress = parseEpochProgress(logStr);
+                                int parsedProgress = parseEpochProgress(tailLog.toString());
                                 if (parsedProgress > 0) {
                                     progress = parsedProgress;
                                     final int currentProgress = progress;
@@ -218,11 +205,7 @@ public class YoloService {
                                     });
                                 }
 
-                                updateStatus(jobId, "RUNNING", progress, fullLog, finalPodName);
-
-                                if (++trainLogSnapshotTick % 30 == 0) {
-                                    persistTrainLog(recordName, fullLog);
-                                }
+                                updateStatus(jobId, "RUNNING", progress, "", finalPodName);
 
                                 Process checkProcess = new ProcessBuilder("kubectl", "get", "pod", finalPodName, "-o", "jsonpath={.status.phase}").start();
                                 BufferedReader checkReader = new BufferedReader(new InputStreamReader(checkProcess.getInputStream(), "UTF-8"));
@@ -236,7 +219,12 @@ public class YoloService {
                             }
                         }
 
-                        String finalLog = jobStatusMap.get(jobId) != null ? jobStatusMap.get(jobId).getLog() : "";
+                        String fullLog = getPodLogs(finalPodName);
+                        if (fullLog == null || fullLog.isEmpty() || fullLog.startsWith("Error:") || fullLog.startsWith("获取日志中")) {
+                            fullLog = getJobLogs(recordName + "-train-job");
+                        }
+
+                        String finalLog = fullLog != null ? fullLog : "";
                         String finalLogLower = finalLog.toLowerCase();
 
                         boolean hasFatalError = finalLogLower.contains("fatal error") || finalLogLower.contains("traceback");
@@ -250,9 +238,7 @@ public class YoloService {
                         boolean trainSuccess = hasSuccessIndicators && !hasFatalError;
 
                         if (trainSuccess) {
-                            StringBuilder successLog = new StringBuilder(finalLog);
-                            successLog.append("\nTraining completed successfully\n");
-                            String finalLogStr = successLog.toString();
+                            String finalLogStr = finalLog + "\nTraining completed successfully\n";
                             updateStatus(jobId, "COMPLETED", 100, finalLogStr, finalPodName);
                             persistTrainLog(recordName, finalLogStr);
                             trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
@@ -262,9 +248,7 @@ public class YoloService {
                                 trainingRecordRepository.save(r);
                             });
                         } else {
-                            StringBuilder failLog = new StringBuilder(finalLog);
-                            failLog.append("\nTraining failed\n");
-                            String finalLogStr = failLog.toString();
+                            String finalLogStr = finalLog + "\nTraining failed\n";
                             updateStatus(jobId, "FAILED", 0, finalLogStr, finalPodName);
                             persistTrainLog(recordName, finalLogStr);
                             trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
@@ -347,10 +331,6 @@ public class YoloService {
                 int exitCode = process.waitFor();
 
                 if (exitCode == 0) {
-                    logBuilder.append("测试状态: Running\n");
-                    logBuilder.append("正在等待节点创建...\n");
-                    updateStatus(jobId, "RUNNING", 0, logBuilder.toString());
-
                     Thread.sleep(2000);
 
                     String podName = null;
@@ -362,10 +342,6 @@ public class YoloService {
                             String podLine = podReader.readLine();
                             if (podLine != null && podLine.startsWith("pod/")) {
                                 podName = podLine.substring(4);
-                                logBuilder.append("Pod创建成功: ").append(podName).append("\n");
-                                logBuilder.append("开始获取实时日志...\n");
-                                updateStatus(jobId, "RUNNING", 0, logBuilder.toString(), podName);
-
                                 final String finalPodName = podName;
                                 trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
                                     r.setTestPodName(finalPodName);
@@ -380,32 +356,15 @@ public class YoloService {
                     if (podName != null) {
                         final String finalPodName = podName;
                         int progress = 0;
-                        int testLogSnapshotTick = 0;
 
                         while (true) {
                             try {
-                                Thread.sleep(1000);
-
-                                Process logProcess = new ProcessBuilder("kubectl", "logs", finalPodName).start();
-                                BufferedReader logReader = new BufferedReader(new InputStreamReader(logProcess.getInputStream(), "UTF-8"));
-                                StringBuilder currentLogs = new StringBuilder();
-                                String line;
-                                while ((line = logReader.readLine()) != null) {
-                                    currentLogs.append(line).append("\n");
-                                }
-                                logProcess.waitFor();
-
-                                String fullLog = "测试状态: Running\nPod创建成功: " + finalPodName + "\n开始获取实时日志...\n" + currentLogs.toString();
+                                Thread.sleep(2000);
 
                                 if (progress < 90) {
                                     progress += 5;
                                 }
-
-                                updateStatus(jobId, "RUNNING", progress, fullLog, finalPodName);
-
-                                if (++testLogSnapshotTick % 30 == 0) {
-                                    persistTestLog(recordName, fullLog);
-                                }
+                                updateStatus(jobId, "RUNNING", progress, "", finalPodName);
 
                                 Process checkProcess = new ProcessBuilder("kubectl", "get", "pod", finalPodName, "-o", "jsonpath={.status.phase}").start();
                                 BufferedReader checkReader = new BufferedReader(new InputStreamReader(checkProcess.getInputStream(), "UTF-8"));
@@ -419,7 +378,12 @@ public class YoloService {
                             }
                         }
 
-                        String finalLog = jobStatusMap.get(jobId) != null ? jobStatusMap.get(jobId).getLog() : "";
+                        String fullLog = getPodLogs(finalPodName);
+                        if (fullLog == null || fullLog.isEmpty() || fullLog.startsWith("Error:") || fullLog.startsWith("获取日志中")) {
+                            fullLog = getJobLogs(recordName + "-test-job");
+                        }
+
+                        String finalLog = fullLog != null ? fullLog : "";
                         String finalLogLower = finalLog.toLowerCase();
 
                         boolean hasFatalError = finalLogLower.contains("fatal error") || finalLogLower.contains("traceback");
@@ -433,9 +397,7 @@ public class YoloService {
                         boolean testSuccess = hasSuccessIndicators && !hasFatalError;
 
                         if (testSuccess) {
-                            StringBuilder successLog = new StringBuilder(finalLog);
-                            successLog.append("\nTesting completed successfully\n");
-                            String finalLogStr = successLog.toString();
+                            String finalLogStr = finalLog + "\nTesting completed successfully\n";
                             updateStatus(jobId, "COMPLETED", 100, finalLogStr, finalPodName);
                             persistTestLog(recordName, finalLogStr);
                             trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
@@ -443,9 +405,7 @@ public class YoloService {
                                 trainingRecordRepository.save(r);
                             });
                         } else {
-                            StringBuilder failLog = new StringBuilder(finalLog);
-                            failLog.append("\nTesting failed\n");
-                            String finalLogStr = failLog.toString();
+                            String finalLogStr = finalLog + "\nTesting failed\n";
                             updateStatus(jobId, "FAILED", 0, finalLogStr, finalPodName);
                             persistTestLog(recordName, finalLogStr);
                             trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
@@ -555,12 +515,6 @@ public class YoloService {
         return jobStatusMap;
     }
 
-    /**
-     * 删除数据集完整顺序：<br>
-     * 1) 在<strong>短事务</strong>内删除 {@code training_records} 与 {@code datasets}（JPA 派生 delete 必须在事务中执行，否则会失败或不落库）<br>
-     * 2) 再尽力删除各训练任务的 K8s / yaml / runs / logs<br>
-     * 3) 最后删除 {@code dataName_processed} 预处理目录<br>
-     */
     public String deleteDataset(String dataName) {
         StringBuilder logBuilder = new StringBuilder();
         try {
@@ -597,9 +551,6 @@ public class YoloService {
         }
     }
 
-    /**
-     * 先在事务中删除 {@code training_records} 行，再清理本地/K8s；避免无事务时派生 delete 无效。
-     */
     public boolean deleteTrainingRecord(String recordName) {
         if (recordName == null || recordName.isBlank()) {
             return false;
@@ -816,7 +767,7 @@ public class YoloService {
         }
     }
 
-    private void saveLogToFile(String logName, String content) {
+    public void saveLogToFile(String logName, String content) {
         try {
             File dir = new File(LOGS_DIR);
             if (!dir.exists()) dir.mkdirs();
@@ -850,7 +801,6 @@ public class YoloService {
         });
     }
 
-    /** 按数据库中记载的文件名读取 logs 目录下文本（完成后查看日志） */
     public String readLogContentByFileName(String logFileName) {
         if (logFileName == null || logFileName.isBlank()) {
             return null;

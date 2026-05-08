@@ -130,6 +130,26 @@ public class AuthService {
         logOperation(null, operatorRole, "DELETE_USER", user.getUsername(), "删除用户");
     }
 
+    public void changePassword(String username, String oldPassword, String newPassword) {
+        if (oldPassword == null || oldPassword.trim().isEmpty()) {
+            throw new IllegalArgumentException("请输入旧密码");
+        }
+        if (newPassword == null || newPassword.trim().isEmpty()) {
+            throw new IllegalArgumentException("请输入新密码");
+        }
+        if (newPassword.length() < 4) {
+            throw new IllegalArgumentException("新密码长度不能少于4位");
+        }
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+        if (!passwordEncoder.matches(oldPassword, user.getPassword())) {
+            throw new IllegalArgumentException("旧密码错误");
+        }
+        user.setPassword(passwordEncoder.encode(newPassword));
+        userRepository.save(user);
+        logOperation(null, username, "CHANGE_PASSWORD", username, "修改密码");
+    }
+
     public void logOperation(Long userId, String username, String action, String target, String detail) {
         if (userId == null && username != null && !username.isEmpty()) {
             userId = userRepository.findByUsername(username).map(User::getId).orElse(null);

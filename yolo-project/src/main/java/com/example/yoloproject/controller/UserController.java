@@ -144,4 +144,22 @@ public class UserController {
 
         return ResponseEntity.ok(logs);
     }
+
+    @PutMapping("/change-password")
+    public ResponseEntity<Map<String, Object>> changePassword(@RequestBody Map<String, String> request, HttpServletRequest httpRequest) {
+        String username = (String) httpRequest.getAttribute("username");
+        String oldPassword = request.get("oldPassword");
+        String newPassword = request.get("newPassword");
+        Map<String, Object> response = new HashMap<>();
+        try {
+            authService.changePassword(username, oldPassword, newPassword);
+            response.put("message", "密码修改成功");
+            response.put("status", "success");
+            return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            response.put("message", e.getMessage());
+            response.put("status", "error");
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
 }

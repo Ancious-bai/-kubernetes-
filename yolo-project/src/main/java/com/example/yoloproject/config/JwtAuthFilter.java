@@ -18,7 +18,8 @@ public class JwtAuthFilter implements Filter {
 
     private static final List<String> PUBLIC_PATHS = List.of(
             "/api/auth/login",
-            "/api/dialog/folder"
+            "/api/dialog/folder",
+            "/ws/logs/**"
     );
 
     private final AntPathMatcher pathMatcher = new AntPathMatcher();

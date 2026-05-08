@@ -24,12 +24,12 @@
       </nav>
       <div class="sidebar-footer">
         <div class="user-badge"><el-tag :type="currentUser.role==='ROOT'?'danger':currentUser.role==='ADMIN'?'warning':'info'" size="small">{{ currentUser.role }}</el-tag><span class="user-name">{{ currentUser.username }}</span></div>
+        <div class="user-badge"><el-button size="small" @click="showChangePasswordDialog=true">更改密码</el-button></div>
         <div class="footer-actions"><el-button v-if="currentUser.role==='ROOT'" size="small" type="danger" plain @click="handleCleanup">清空</el-button><el-button size="small" type="danger" @click="handleLogout">退出</el-button></div>
       </div>
     </aside>
 
     <main class="main-content">
-      <!-- ==================== 主页：训练管理 ==================== -->
       <div v-show="activePage==='main'" class="page-main">
         <div class="page-header"><h2>训练管理</h2></div>
         <div class="top-section">
@@ -75,7 +75,7 @@
                       <el-button v-if="rec.trainStatus==='COMPLETED'" size="small" type="success" @click="showSaveModelDialog(rec)">保存模型</el-button>
                       <el-button v-if="rec.trainStatus==='COMPLETED' && rec.testStatus!=='COMPLETED' && rec.testStatus!=='RUNNING'" size="small" type="success" @click="handleTestRecord(rec)">测试</el-button>
                       <el-button v-if="hasTestLog(rec)" size="small" plain @click="handleViewTestLog(rec)">测试日志</el-button>
-                      <el-button v-if="canDeleteRecord(rec)" size="small" type="danger" @click="handleDeleteRecord(rec)">删除</el-button>
+                      <el-button size="small" type="danger" @click="handleDeleteRecord(rec)">删除</el-button>
                     </div></td>
                   </tr>
                   <tr v-for="pending in getPendingRecords(ds.name)" :key="pending.key">
@@ -110,7 +110,6 @@
         </div>
       </div>
 
-      <!-- ==================== 操作日志页面 ==================== -->
       <div v-show="activePage==='logs'" class="page-logs">
         <div class="page-header"><h2>操作日志</h2></div>
         <el-card shadow="hover" class="filter-card">
@@ -131,7 +130,6 @@
         </el-card>
       </div>
 
-      <!-- ==================== 用户管理页面 ==================== -->
       <div v-show="activePage==='users'" class="page-users">
         <div class="page-header"><h2>用户管理</h2></div>
         <el-card shadow="hover" class="filter-card">
@@ -149,7 +147,6 @@
       </div>
     </main>
 
-    <!-- ==================== 对话框 ==================== -->
     <el-dialog title="保存模型" v-model="saveModelDialogVisible" width="480px" :close-on-click-modal="false">
       <el-form :model="saveModelForm" label-width="80px">
         <el-form-item label="记录"><el-tag type="success">{{ saveModelForm.recordName }}</el-tag></el-form-item>
@@ -173,6 +170,8 @@
     <el-dialog title="确认清空" v-model="cleanupConfirmVisible" width="400px"><p>确定<strong>清空全部数据</strong>？</p><p style="color:#f56c6c;font-size:13px">此操作将删除所有数据集、训练记录、K8s Job/YAML和操作日志，不可恢复。</p><template #footer><el-button @click="cleanupConfirmVisible=false">取消</el-button><el-button type="danger" @click="confirmCleanup" :loading="cleanupLoading">确认</el-button></template></el-dialog>
 
     <el-dialog title="确认删除用户" v-model="deleteUserConfirmVisible" width="360px"><p>确定删除用户 <strong>{{ userToDelete.username }}</strong>？</p><p style="color:#f56c6c;font-size:13px">此操作不可恢复。</p><template #footer><el-button @click="deleteUserConfirmVisible=false">取消</el-button><el-button type="danger" @click="confirmDeleteUser">确认</el-button></template></el-dialog>
+
+    <el-dialog title="修改密码" v-model="showChangePasswordDialog" width="360px"><el-form :model="changePasswordForm" label-width="70px"><el-form-item label="旧密码"><el-input v-model="changePasswordForm.oldPassword" type="password" placeholder="请输入旧密码" /></el-form-item><el-form-item label="新密码"><el-input v-model="changePasswordForm.newPassword" type="password" placeholder="请输入新密码（至少4位）" /></el-form-item><el-form-item label="确认"><el-input v-model="changePasswordForm.confirmPassword" type="password" placeholder="再次输入新密码" /></el-form-item></el-form><template #footer><el-button @click="showChangePasswordDialog=false">取消</el-button><el-button type="primary" @click="handleChangePassword">确认修改</el-button></template></el-dialog>
   </div>
 </template>
 
@@ -193,19 +192,24 @@ const currentStep=ref(''),datasetList=ref([]),deleteConfirmVisible=ref(false),cl
 const deleteRecordConfirmVisible=ref(false),recordToDelete=ref('')
 const processingStatus=ref({}),testLoadingStatus=ref({}),trainingRecords=ref([]),userList=ref([]),operationLogs=ref([]),showAddUserDialog=ref(false)
 const newUserForm=reactive({username:'',password:'',role:'USER'})
-const pendingRecords=ref({}),preprocessLogs=ref({}),trainLogs=ref({}),testLogs=ref({}),closedLogs=ref({}),pollingIntervals=ref({})
+const pendingRecords=ref({}),preprocessLogs=ref({}),trainLogs=ref({}),testLogs=ref({})
 const logRefs=ref({})
 const saveModelDialogVisible=ref(false),saveModelForm=reactive({dataName:'',modelType:'best',savePath:'',recordName:''}),saveModelLoading=ref(false)
 const showRoleDialogVisible=ref(false),roleEditTarget=ref({}),roleEditNewRole=ref('')
 const deleteUserConfirmVisible=ref(false),userToDelete=ref({})
+const showChangePasswordDialog=ref(false),changePasswordForm=reactive({oldPassword:'',newPassword:'',confirmPassword:''})
 const currentPage=ref(1),pageSize=ref(10),total=ref(0)
 const isDragOver=ref(false)
 const activePage=ref('main')
+const preprocessTimers=ref({})
 
 const logFilter=reactive({username:'',action:'',startTime:'',endTime:''})
-const logActions=['ADD_DATASET','PREPROCESS','TRAIN','TEST','SAVE_MODEL','DELETE_DATASET','DELETE_RECORD','CONFIG_CHANGE','CREATE_USER','UPDATE_ROLE','DELETE_USER']
+const logActions=['ADD_DATASET','PREPROCESS','TRAIN','TEST','SAVE_MODEL','DELETE_DATASET','DELETE_RECORD','CONFIG_CHANGE','CREATE_USER','UPDATE_ROLE','DELETE_USER','CHANGE_PASSWORD']
 const logPage=ref(1),logPageSize=ref(20)
 const userSearch=ref(''),userRoleFilter=ref('')
+
+const wsConnections=new Map()
+let statusRefreshTimer=null
 
 const isAdmin=computed(()=>currentUser.role==='ROOT'||currentUser.role==='ADMIN')
 const pagedDatasets=computed(()=>{const s=(currentPage.value-1)*pageSize.value;return datasetList.value.slice(s,s+pageSize.value)})
@@ -223,7 +227,6 @@ const getPendingRecords=(dataName)=>pendingRecords.value[dataName]||[]
 const isEditable=(rec)=>rec.trainStatus==='IDLE'&&(!rec.trainJobId||rec.trainJobId==='')
 const hasTrainLog=(rec)=>rec.trainStatus!=='IDLE'||rec.trainJobId
 const hasTestLog=(rec)=>rec.testStatus&&rec.testStatus!=='IDLE'
-const canDeleteRecord=(rec)=>rec.trainStatus!=='RUNNING'&&rec.testStatus!=='RUNNING'
 const addPendingRecord=(dataName)=>{if(!pendingRecords.value[dataName])pendingRecords.value[dataName]=[];const k='pending-'+Date.now();pendingRecords.value[dataName].push({key:k,epochs:savedDefaultEpochs.value,imgsz:savedDefaultImgsz.value,priority:5})}
 const removePendingRecord=(dataName,key)=>{if(pendingRecords.value[dataName])pendingRecords.value[dataName]=pendingRecords.value[dataName].filter(r=>r.key!==key)}
 
@@ -231,10 +234,12 @@ const switchToLogs=()=>{activePage.value='logs';loadOperationLogs()}
 const switchToUsers=()=>{activePage.value='users';loadUsers()}
 
 const handleLogin=async()=>{if(loginLoading.value)return;loginLoading.value=true;loginError.value='';try{const r=await axios.post('/api/auth/login',loginForm);token.value=r.data.token;currentUser.username=r.data.username;currentUser.role=r.data.role;isLoggedIn.value=true;localStorage.setItem('token',token.value);localStorage.setItem('username',currentUser.username);localStorage.setItem('role',currentUser.role);onLoginSuccess()}catch(e){loginError.value=e.response?.data?.message||'登录失败'}finally{loginLoading.value=false}}
-const handleLogout=()=>{token.value='';currentUser.username='';currentUser.role='';isLoggedIn.value=false;localStorage.removeItem('token');localStorage.removeItem('username');localStorage.removeItem('role');stopAllPolling();datasetList.value=[];trainingRecords.value=[];userList.value=[];operationLogs.value=[];Object.keys(pendingRecords.value).forEach(k=>delete pendingRecords.value[k]);Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k]);Object.keys(closedLogs.value).forEach(k=>delete closedLogs.value[k]);Object.keys(processingStatus.value).forEach(k=>delete processingStatus.value[k]);Object.keys(testLoadingStatus.value).forEach(k=>delete testLoadingStatus.value[k]);currentPage.value=1;total.value=0;activePage.value='main'}
 
-const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){maxConcurrentTasks.value=r.data.maxConcurrentTasks;savedMaxConcurrentTasks.value=r.data.maxConcurrentTasks;defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz}}catch(e){}}
-const loadTrainingRecords=async()=>{try{trainingRecords.value=(await api.value.get('/api/training-records')).data}catch(e){}}
+const handleLogout=()=>{token.value='';currentUser.username='';currentUser.role='';isLoggedIn.value=false;localStorage.removeItem('token');localStorage.removeItem('username');localStorage.removeItem('role');stopAllWs();stopStatusRefresh();stopAllPreprocessTimers();datasetList.value=[];trainingRecords.value=[];userList.value=[];operationLogs.value=[];Object.keys(pendingRecords.value).forEach(k=>delete pendingRecords.value[k]);Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k]);Object.keys(processingStatus.value).forEach(k=>delete processingStatus.value[k]);Object.keys(testLoadingStatus.value).forEach(k=>delete testLoadingStatus.value[k]);currentPage.value=1;total.value=0;activePage.value='main'}
+
+const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){maxConcurrentTasks.value=r.data.maxConcurrentTasks;savedMaxConcurrentTasks.value=r.data.maxConcurrentTasks;defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz}startStatusRefresh()}catch(e){}}
+
+const loadTrainingRecords=async()=>{try{const oldRecords=[...trainingRecords.value];trainingRecords.value=(await api.value.get('/api/training-records')).data;checkStatusChanges(oldRecords,trainingRecords.value)}catch(e){}}
 const loadUsers=async()=>{try{const params={};if(userSearch.value)params.search=userSearch.value;if(userRoleFilter.value)params.role=userRoleFilter.value;userList.value=(await api.value.get('/api/users',{params})).data}catch(e){}}
 const loadOperationLogs=async()=>{try{const params={};if(logFilter.username)params.username=logFilter.username;if(logFilter.action)params.action=logFilter.action;if(logFilter.startTime)params.startTime=logFilter.startTime;if(logFilter.endTime)params.endTime=logFilter.endTime;operationLogs.value=(await api.value.get('/api/users/logs',{params})).data}catch(e){}}
 const refreshDatasets=async()=>{try{const r=await api.value.get('/api/datasets');datasetList.value=r.data;total.value=r.data.length}catch(e){if(e.response?.status===401)handleLogout()}}
@@ -243,7 +248,7 @@ const fetchFilteredLogs=async()=>{logPage.value=1;await loadOperationLogs()}
 const resetLogFilter=()=>{logFilter.username='';logFilter.action='';logFilter.startTime='';logFilter.endTime='';logPage.value=1;loadOperationLogs()}
 const fetchFilteredUsers=async()=>{await loadUsers()}
 
-const getActionTagType=(action)=>{const map={ADD_DATASET:'success',PREPROCESS:'warning',TRAIN:'primary',TEST:'primary',SAVE_MODEL:'success',DELETE_DATASET:'danger',DELETE_RECORD:'danger',CONFIG_CHANGE:'info',CREATE_USER:'success',UPDATE_ROLE:'warning',DELETE_USER:'danger'};return map[action]||'info'}
+const getActionTagType=(action)=>{const map={ADD_DATASET:'success',PREPROCESS:'warning',TRAIN:'primary',TEST:'primary',SAVE_MODEL:'success',DELETE_DATASET:'danger',DELETE_RECORD:'danger',CONFIG_CHANGE:'info',CREATE_USER:'success',UPDATE_ROLE:'warning',DELETE_USER:'danger',CHANGE_PASSWORD:'warning'};return map[action]||'info'}
 
 const handleAddDataset=async()=>{if(!form.inputDir){showMsg('请输入数据路径','warning');return}const id=form.inputDir.trim().replace(/^["']|["']$/g,'');if(!looksLikeFullDatasetPath(id)){showMsg('路径无效：请填写完整路径','warning');return}const dn=id.split(/[/\\]/).pop();currentStep.value='addDataset';try{await api.value.post('/api/datasets',{inputDir:id});await refreshDatasets();await loadTrainingRecords();showMsg(`数据集 ${dn} 添加成功`)}catch(e){showMsg(`失败: ${e.response?.data?.message||e.message}`,'error')}finally{currentStep.value='';form.inputDir=''}}
 
@@ -252,37 +257,48 @@ const handleDrop=async(e)=>{isDragOver.value=false;const files=e.dataTransfer.fi
 const browseFolder=async(title,target)=>{try{const r=await axios.get('/api/dialog/folder',{params:{title},headers:{Authorization:`Bearer ${token.value}`}});if(r.data.status==='success'&&r.data.path){if(target==='input')form.inputDir=r.data.path;else if(target==='save')saveModelForm.savePath=r.data.path}}catch(e){showMsg('打开文件夹失败','error')}}
 
 const handlePreprocessDataset=async(dataName)=>{processingStatus.value[dataName]=true;preprocessLogs.value[dataName]=`正在预处理 ${dataName}...\n`;try{const r=await api.value.post('/api/preprocess',{dataName});showMsg('预处理任务已启动');pollPreprocess(r.data.jobId,dataName)}catch(e){preprocessLogs.value[dataName]+=`错误: ${e.message}\n`;showMsg('预处理失败','error');processingStatus.value[dataName]=false}}
-const pollPreprocess=(jobId,dataName)=>{const tid=`pre-${dataName}-${Date.now()}`;const iv=setInterval(async()=>{try{const r=await api.value.get(`/api/status/${jobId}`);if(r.data){if(r.data.log)preprocessLogs.value[dataName]=r.data.log;if(r.data.status==='COMPLETED'||r.data.status==='DONE'||r.data.status==='FAILED'){clearInterval(iv);delete pollingIntervals.value[tid];processingStatus.value[dataName]=false;if(r.data.status==='COMPLETED'||r.data.status==='DONE')showMsg(`数据集 ${dataName} 预处理成功`);else showMsg(`预处理失败`,'error');refreshDatasets()}}}catch(e){clearInterval(iv);delete pollingIntervals.value[tid];processingStatus.value[dataName]=false}},1000);pollingIntervals.value[tid]=iv}
 
-const handleTrainRecord=async(rec)=>{const rn=rec.recordName;closedLogs.value[rn]=false;trainLogs.value[rn]=`训练任务正在排队等待中...\n记录: ${rn}\n参数: epochs=${rec.epochs}, imgsz=${rec.imgsz}\n状态: 排队中\n等待中...\n`;try{const r=await api.value.post('/api/scheduler/add',{dataName:rec.dataName,epochs:rec.epochs,imgsz:rec.imgsz,priority:rec.priority||5});showMsg(r.data.message);loadTrainingRecords();startQueueMonitor(rn,rec.dataName)}catch(e){delete trainLogs.value[rn];delete closedLogs.value[rn];showMsg(e.response?.data?.message||'加入队列失败','error')}}
-const handleTrainPending=async(dataName,pending)=>{const rn=`${dataName}-e${pending.epochs}-i${pending.imgsz}`;closedLogs.value[rn]=false;trainLogs.value[rn]=`训练任务正在排队等待中...\n记录: ${rn}\n参数: epochs=${pending.epochs}, imgsz=${pending.imgsz}\n状态: 排队中\n等待中...\n`;try{const r=await api.value.post('/api/scheduler/add',{dataName,epochs:pending.epochs,imgsz:pending.imgsz,priority:pending.priority});showMsg(r.data.message);removePendingRecord(dataName,pending.key);loadTrainingRecords();startQueueMonitor(rn,dataName)}catch(e){delete trainLogs.value[rn];delete closedLogs.value[rn];showMsg(e.response?.data?.message||'加入队列失败','error')}}
+const pollPreprocess=(jobId,dataName)=>{const tid=`pre-${dataName}-${Date.now()}`;const iv=setInterval(async()=>{try{const r=await api.value.get(`/api/status/${jobId}`);if(r.data){if(r.data.log)preprocessLogs.value[dataName]=r.data.log;if(r.data.status==='COMPLETED'||r.data.status==='DONE'||r.data.status==='FAILED'){clearInterval(iv);delete preprocessTimers.value[tid];processingStatus.value[dataName]=false;if(r.data.status==='COMPLETED'||r.data.status==='DONE')showMsg(`数据集 ${dataName} 预处理成功`);else showMsg(`预处理失败`,'error');refreshDatasets()}}}catch(e){clearInterval(iv);delete preprocessTimers.value[tid];processingStatus.value[dataName]=false}},1000);preprocessTimers.value[tid]=iv}
 
-const startQueueMonitor=(recordName,dataName)=>{const tid=`q-${recordName}-${Date.now()}`;let lp=false;const iv=setInterval(async()=>{try{if(closedLogs.value[recordName]){clearInterval(iv);delete pollingIntervals.value[tid];return}const qr=await api.value.get('/api/scheduler/queue');const t=qr.data.find(t=>t.recordName===recordName);if(t){if(t.status==='RUNNING'&&!lp){lp=true;startTrainPolling(recordName)}else if(t.status==='COMPLETED'||t.status==='FAILED'){clearInterval(iv);delete pollingIntervals.value[tid];refreshDatasets();loadTrainingRecords()}}else{const rec=trainingRecords.value.find(r=>r.recordName===recordName);if(rec&&(rec.trainStatus==='COMPLETED'||rec.trainStatus==='FAILED')){clearInterval(iv);delete pollingIntervals.value[tid]}}refreshDatasets();loadTrainingRecords()}catch(e){}},2000);pollingIntervals.value[tid]=iv}
-const startTrainPolling=(recordName)=>{const tid=`tl-${recordName}`;if(pollingIntervals.value[tid])clearInterval(pollingIntervals.value[tid]);const iv=setInterval(async()=>{try{const r=await api.value.get(`/api/training-records/${recordName}/train-log`);if(r.data.log&&closedLogs.value[recordName]!==true)trainLogs.value[recordName]=r.data.log;if(r.data.status==='COMPLETED'||r.data.status==='FAILED'){clearInterval(iv);delete pollingIntervals.value[tid];refreshDatasets();loadTrainingRecords()}}catch(e){}},1000);pollingIntervals.value[tid]=iv}
+const stopAllPreprocessTimers=()=>{Object.values(preprocessTimers.value).forEach(id=>clearInterval(id));preprocessTimers.value={}}
 
-const handleTestRecord=async(rec)=>{closedLogs.value[rec.recordName]=false;testLogs.value[rec.recordName]=`正在测试 ${rec.recordName}...\n状态: Running\n等待节点创建...\n`;testLoadingStatus.value[rec.recordName]=true;try{const r=await api.value.post('/api/test',{dataName:rec.dataName,imgsz:rec.imgsz,recordName:rec.recordName});showMsg('测试任务已启动');loadTrainingRecords();pollTest(r.data.jobId,rec.recordName)}catch(e){testLogs.value[rec.recordName]+=`错误: ${e.message}\n`;testLoadingStatus.value[rec.recordName]=false}}
-const pollTest=(jobId,recordName)=>{const tid=`test-${recordName}-${Date.now()}`;const iv=setInterval(async()=>{try{const r=await api.value.get(`/api/status/${jobId}`);if(r.data){if(r.data.log)testLogs.value[recordName]=r.data.log;if(r.data.status==='COMPLETED'||r.data.status==='DONE'||r.data.status==='FAILED'){clearInterval(iv);delete pollingIntervals.value[tid];testLoadingStatus.value[recordName]=false;if(r.data.status==='COMPLETED'||r.data.status==='DONE')showMsg(`${recordName} 测试成功`);else showMsg(`测试失败`,'error');refreshDatasets();loadTrainingRecords()}}}catch(e){clearInterval(iv);delete pollingIntervals.value[tid];testLoadingStatus.value[recordName]=false}},1000);pollingIntervals.value[tid]=iv}
+const handleTrainRecord=async(rec)=>{const rn=rec.recordName;trainLogs.value[rn]='';try{const r=await api.value.post('/api/scheduler/add',{dataName:rec.dataName,epochs:rec.epochs,imgsz:rec.imgsz,priority:rec.priority||5});showMsg(r.data.message);await loadTrainingRecords();connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){delete trainLogs.value[rn];showMsg(e.response?.data?.message||'加入队列失败','error')}}
 
-const handleViewTrainLog=async(rec)=>{const rn=rec.recordName;closedLogs.value[rn]=false;try{const r=await api.value.get(`/api/training-records/${rn}/train-log`);if(r.data.log)trainLogs.value[rn]=r.data.log;if(rec.trainStatus==='RUNNING')startTrainPolling(rn);else if(rec.trainStatus==='QUEUED')startQueueMonitor(rn,rec.dataName)}catch(e){trainLogs.value[rn]=`获取日志失败: ${e.message}`}}
-const handleViewTestLog=async(rec)=>{const rn=rec.recordName;closedLogs.value[rn]=false;try{const r=await api.value.get(`/api/training-records/${rn}/test-log`);if(r.data.log)testLogs.value[rn]=r.data.log;if(rec.testStatus==='RUNNING'){const tid=`tl2-${rn}`;if(pollingIntervals.value[tid])clearInterval(pollingIntervals.value[tid]);const iv=setInterval(async()=>{try{const r2=await api.value.get(`/api/training-records/${rn}/test-log`);if(r2.data.log&&closedLogs.value[rn]!==true)testLogs.value[rn]=r2.data.log;if(r2.data.status==='COMPLETED'||r2.data.status==='FAILED'){clearInterval(iv);delete pollingIntervals.value[tid];refreshDatasets();loadTrainingRecords()}}catch(e){}},1000);pollingIntervals.value[tid]=iv}}catch(e){testLogs.value[rn]=`获取日志失败: ${e.message}`}}
+const handleTrainPending=async(dataName,pending)=>{const rn=`${dataName}-e${pending.epochs}-i${pending.imgsz}`;trainLogs.value[rn]='';try{const r=await api.value.post('/api/scheduler/add',{dataName,epochs:pending.epochs,imgsz:pending.imgsz,priority:pending.priority});showMsg(r.data.message);removePendingRecord(dataName,pending.key);await loadTrainingRecords();connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){delete trainLogs.value[rn];showMsg(e.response?.data?.message||'加入队列失败','error')}}
 
-const closeTrainLog=n=>{delete trainLogs.value[n];closedLogs.value[n]=true;stopByName(n)}
-const closeTestLog=n=>{delete testLogs.value[n];closedLogs.value[n]=true;stopByName(n)}
-const closePreprocessLog=n=>{delete preprocessLogs.value[n];closedLogs.value[n]=true;stopByName(n)}
-const stopByName=n=>{Object.keys(pollingIntervals.value).forEach(tid=>{const parts=tid.split('-');const prefix=parts.slice(0,parts.length-1).join('-');if(tid===n||prefix===n||tid.startsWith(n+'-')){clearInterval(pollingIntervals.value[tid]);delete pollingIntervals.value[tid]}})}
-const stopAllPolling=()=>{Object.values(pollingIntervals.value).forEach(id=>clearInterval(id));pollingIntervals.value={}}
+const handleTestRecord=async(rec)=>{testLogs.value[rec.recordName]='';testLoadingStatus.value[rec.recordName]=true;try{const r=await api.value.post('/api/test',{dataName:rec.dataName,imgsz:rec.imgsz,recordName:rec.recordName});showMsg('测试任务已启动');await loadTrainingRecords();connectLogWebSocket(rec.recordName,'test');startStatusRefresh()}catch(e){testLogs.value[rec.recordName]=`错误: ${e.message}\n`;testLoadingStatus.value[rec.recordName]=false}}
+
+const connectLogWebSocket=(recordName,type)=>{const logKey=recordName+'-'+type;if(wsConnections.has(logKey)){const old=wsConnections.get(logKey);if(old.readyState===WebSocket.OPEN||old.readyState===WebSocket.CONNECTING)return}const wsUrl=`ws://${window.location.host}/ws/logs/${recordName}/${type}`;const ws=new WebSocket(wsUrl);ws.onopen=()=>{console.log(`WebSocket connected: ${logKey}`)};ws.onmessage=(event)=>{if(type==='train'){trainLogs.value[recordName]=(trainLogs.value[recordName]||'')+event.data}else if(type==='test'){testLogs.value[recordName]=(testLogs.value[recordName]||'')+event.data}autoScroll(recordName,type)};ws.onclose=()=>{wsConnections.delete(logKey);refreshDatasets();loadTrainingRecords()};ws.onerror=()=>{wsConnections.delete(logKey)};wsConnections.set(logKey,ws)}
+
+const handleViewTrainLog=async(rec)=>{const rn=rec.recordName;try{if(rec.trainStatus==='RUNNING'||rec.trainStatus==='QUEUED'){connectLogWebSocket(rn,'train')}else{const r=await api.value.get(`/api/training-records/${rn}/train-log`);if(r.data.log)trainLogs.value[rn]=r.data.log;scrollToBottomNow(rn,'train')}}catch(e){trainLogs.value[rn]=`获取日志失败: ${e.message}`}}
+
+const handleViewTestLog=async(rec)=>{const rn=rec.recordName;try{if(rec.testStatus==='RUNNING'||rec.testStatus==='QUEUED'){connectLogWebSocket(rn,'test')}else{const r=await api.value.get(`/api/training-records/${rn}/test-log`);if(r.data.log)testLogs.value[rn]=r.data.log;scrollToBottomNow(rn,'test')}}catch(e){testLogs.value[rn]=`获取日志失败: ${e.message}`}}
+
+const closeTrainLog=n=>{delete trainLogs.value[n];closeWsConnection(n+'-train')}
+const closeTestLog=n=>{delete testLogs.value[n];closeWsConnection(n+'-test')}
+const closePreprocessLog=n=>{delete preprocessLogs.value[n]}
+
+const closeWsConnection=key=>{const ws=wsConnections.get(key);if(ws){if(ws.readyState===WebSocket.OPEN||ws.readyState===WebSocket.CONNECTING)ws.close();wsConnections.delete(key)}}
+const stopAllWs=()=>{wsConnections.forEach(ws=>{if(ws.readyState===WebSocket.OPEN||ws.readyState===WebSocket.CONNECTING)ws.close()});wsConnections.clear()}
+
+const checkStatusChanges=(oldRecords,newRecords)=>{for(const rec of newRecords){const old=oldRecords.find(r=>r.recordName===rec.recordName);const trainLogOpen=rec.recordName in trainLogs.value;const testLogOpen=rec.recordName in testLogs.value;if(trainLogOpen){if(old&&old.trainStatus!=='RUNNING'&&rec.trainStatus==='RUNNING'){connectLogWebSocket(rec.recordName,'train')}if(old&&old.trainStatus==='RUNNING'&&rec.trainStatus==='COMPLETED'){closeWsConnection(rec.recordName+'-train');showMsg(`${rec.recordName} 训练完成`)}if(old&&old.trainStatus==='RUNNING'&&rec.trainStatus==='FAILED'){closeWsConnection(rec.recordName+'-train');showMsg(`${rec.recordName} 训练失败`,'error')}}if(testLogOpen){if(old&&old.testStatus!=='RUNNING'&&rec.testStatus==='RUNNING'){connectLogWebSocket(rec.recordName,'test')}if(old&&old.testStatus==='RUNNING'&&rec.testStatus==='COMPLETED'){closeWsConnection(rec.recordName+'-test');showMsg(`${rec.recordName} 测试完成`)}if(old&&old.testStatus==='RUNNING'&&rec.testStatus==='FAILED'){closeWsConnection(rec.recordName+'-test');showMsg(`${rec.recordName} 测试失败`,'error')}}}}
+
+const hasActiveTasks=()=>trainingRecords.value.some(r=>r.trainStatus==='RUNNING'||r.trainStatus==='QUEUED'||r.testStatus==='RUNNING'||r.testStatus==='QUEUED')
+
+const startStatusRefresh=()=>{if(statusRefreshTimer)return;statusRefreshTimer=setInterval(async()=>{if(!hasActiveTasks()&&Object.keys(preprocessLogs.value).length===0){stopStatusRefresh();return}await loadTrainingRecords()},3000)}
+const stopStatusRefresh=()=>{if(statusRefreshTimer){clearInterval(statusRefreshTimer);statusRefreshTimer=null}}
 
 const handleDeleteRecord=(rec)=>{recordToDelete.value=rec.recordName;deleteRecordConfirmVisible.value=true}
-const confirmDeleteRecord=async()=>{const rn=recordToDelete.value;try{await api.value.delete(`/api/training-records/${encodeURIComponent(rn)}`);delete trainLogs.value[rn];delete testLogs.value[rn];delete closedLogs.value[rn];stopByName(rn);showMsg('训练记录已删除');await refreshDatasets();await loadTrainingRecords();deleteRecordConfirmVisible.value=false}catch(e){showMsg(e.response?.data?.message||(e.response?.status===404?'记录不存在':'删除失败'),'error')}}
+const confirmDeleteRecord=async()=>{const rn=recordToDelete.value;try{await api.value.delete(`/api/training-records/${encodeURIComponent(rn)}`);delete trainLogs.value[rn];delete testLogs.value[rn];closeWsConnection(rn+'-train');closeWsConnection(rn+'-test');showMsg('训练记录已删除');await refreshDatasets();await loadTrainingRecords();deleteRecordConfirmVisible.value=false}catch(e){showMsg(e.response?.data?.message||(e.response?.status===404?'记录不存在':'删除失败'),'error');deleteRecordConfirmVisible.value=false}}
 
 const showSaveModelDialog=rec=>{saveModelForm.dataName=rec.dataName;saveModelForm.recordName=rec.recordName;saveModelForm.modelType='best';saveModelForm.savePath='';saveModelDialogVisible.value=true}
 const confirmSaveModel=async()=>{saveModelLoading.value=true;try{const r=await api.value.post('/api/model/save',{dataName:saveModelForm.dataName,modelType:saveModelForm.modelType,savePath:saveModelForm.savePath,recordName:saveModelForm.recordName});if(r.data.status==='success'){showMsg('模型保存成功');saveModelDialogVisible.value=false}}catch(e){showMsg(e.response?.data?.message||'保存失败','error')}finally{saveModelLoading.value=false}}
 
 const handleDeleteDataset=dn=>{datasetToDelete.value=dn;deleteConfirmVisible.value=true}
-const confirmDelete=async()=>{try{const dn=datasetToDelete.value;await api.value.delete(`/api/datasets/${encodeURIComponent(dn)}`);const recs=trainingRecords.value.filter(r=>r.dataName===dn);recs.forEach(r=>{delete trainLogs.value[r.recordName];delete testLogs.value[r.recordName];delete closedLogs.value[r.recordName]});delete preprocessLogs.value[dn];delete processingStatus.value[dn];stopByName(dn);await refreshDatasets();await loadTrainingRecords();showMsg('数据集及关联资源已删除');deleteConfirmVisible.value=false}catch(e){showMsg(e.response?.data?.message||(e.response?.status===404?'数据集不存在':'删除失败'),'error')}}
+const confirmDelete=async()=>{try{const dn=datasetToDelete.value;await api.value.delete(`/api/datasets/${encodeURIComponent(dn)}`);const recs=trainingRecords.value.filter(r=>r.dataName===dn);recs.forEach(r=>{delete trainLogs.value[r.recordName];delete testLogs.value[r.recordName];closeWsConnection(r.recordName+'-train');closeWsConnection(r.recordName+'-test')});delete preprocessLogs.value[dn];delete processingStatus.value[dn];await refreshDatasets();await loadTrainingRecords();showMsg('数据集及关联资源已删除');deleteConfirmVisible.value=false}catch(e){showMsg(e.response?.data?.message||(e.response?.status===404?'数据集不存在':'删除失败'),'error')}}
 
 const handleCleanup=()=>{cleanupConfirmVisible.value=true}
-const confirmCleanup=async()=>{cleanupLoading.value=true;try{await api.value.post('/api/cleanup');await refreshDatasets();await loadTrainingRecords();await loadOperationLogs();showMsg('系统已重置');stopAllPolling();Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k])}catch(e){showMsg(e.response?.data?.message||'清理失败','error')}finally{cleanupLoading.value=false;cleanupConfirmVisible.value=false}}
+const confirmCleanup=async()=>{cleanupLoading.value=true;try{await api.value.post('/api/cleanup');await refreshDatasets();await loadTrainingRecords();await loadOperationLogs();showMsg('系统已重置');stopAllWs();Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k])}catch(e){showMsg(e.response?.data?.message||'清理失败','error')}finally{cleanupLoading.value=false;cleanupConfirmVisible.value=false}}
 
 const handleMaxConcurrentTasksChange=async(v)=>{try{await api.value.post('/api/scheduler/max-concurrent',{max:v});savedMaxConcurrentTasks.value=v;showMsg(`同时训练数已设为 ${v}`)}catch(e){showMsg('更新失败','error')}}
 const handleDefaultEpochsChange=async(v)=>{try{await api.value.post('/api/scheduler/default-epochs',{epochs:v});savedDefaultEpochs.value=v;showMsg(`默认Epochs已设为 ${v}`)}catch(e){showMsg('更新失败','error')}}
@@ -293,19 +309,21 @@ const showRoleDialog=user=>{roleEditTarget.value=user;roleEditNewRole.value=curr
 const confirmRoleChange=async()=>{try{await api.value.put(`/api/users/${roleEditTarget.value.id}/role`,{role:roleEditNewRole.value});loadUsers();showRoleDialogVisible.value=false;showMsg(`角色已修改为 ${roleEditNewRole.value}`)}catch(e){showMsg(e.response?.data?.message||'修改失败','error')}}
 const handleDeleteUser=(user)=>{userToDelete.value=user;deleteUserConfirmVisible.value=true}
 const confirmDeleteUser=async()=>{try{await api.value.delete(`/api/users/${userToDelete.value.id}`);deleteUserConfirmVisible.value=false;loadUsers();showMsg('用户已删除')}catch(e){showMsg(e.response?.data?.message||'删除失败','error')}}
+const handleChangePassword=async()=>{if(!changePasswordForm.oldPassword||!changePasswordForm.newPassword){showMsg('请填写完整','warning');return}if(changePasswordForm.newPassword!==changePasswordForm.confirmPassword){showMsg('两次密码不一致','warning');return}if(changePasswordForm.newPassword.length<4){showMsg('新密码至少4位','warning');return}try{await api.value.put('/api/users/change-password',{oldPassword:changePasswordForm.oldPassword,newPassword:changePasswordForm.newPassword});showMsg('密码修改成功');showChangePasswordDialog.value=false;changePasswordForm.oldPassword='';changePasswordForm.newPassword='';changePasswordForm.confirmPassword=''}catch(e){showMsg(e.response?.data?.message||'修改失败','error')}}
 const handleSizeChange=v=>{pageSize.value=v;currentPage.value=1}
 const handleCurrentChange=v=>{currentPage.value=v}
 const getStatusClass=s=>{if(s==='RUNNING')return'warning';if(s==='QUEUED')return'primary';if(s==='COMPLETED')return'success';if(s==='FAILED')return'danger';return'info'}
 const getStatusText=(s,t)=>{const p=t==='train'?'训练':'测试';if(s==='RUNNING')return p+'中';if(s==='QUEUED')return'排队中';if(s==='COMPLETED')return'已完成';if(s==='FAILED')return'失败';return t==='train'?'未训练':'未测试'}
 
 const setLogRef=(n,t,el)=>{if(el)logRefs.value[`${n}-${t}`]=el}
-const autoScroll=(n,t)=>{nextTick(()=>{const el=logRefs.value[`${n}-${t}`];if(el&&el.scrollHeight-el.scrollTop-el.clientHeight<80)el.scrollTop=el.scrollHeight})}
+const autoScroll=(n,t)=>{nextTick(()=>{const el=logRefs.value[`${n}-${t}`];if(el){const distanceToBottom=el.scrollHeight-el.scrollTop-el.clientHeight;if(distanceToBottom<=100)el.scrollTop=el.scrollHeight}})}
+const scrollToBottomNow=(n,t)=>{nextTick(()=>{const el=logRefs.value[`${n}-${t}`];if(el)el.scrollTop=el.scrollHeight})}
 watch(trainLogs,()=>Object.keys(trainLogs.value).forEach(n=>autoScroll(n,'train')),{deep:true})
 watch(testLogs,()=>Object.keys(testLogs.value).forEach(n=>autoScroll(n,'test')),{deep:true})
 watch(preprocessLogs,()=>Object.keys(preprocessLogs.value).forEach(n=>autoScroll(n,'preprocess')),{deep:true})
 
 onMounted(()=>{const t=localStorage.getItem('token'),u=localStorage.getItem('username'),r=localStorage.getItem('role');if(t&&u){token.value=t;currentUser.username=u;currentUser.role=r||'USER';isLoggedIn.value=true;onLoginSuccess()}})
-onUnmounted(()=>{stopAllPolling()})
+onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 </script>
 
 <style scoped>
@@ -359,10 +377,10 @@ onUnmounted(()=>{stopAllPolling()})
 .pagination-container{display:flex;justify-content:center;margin-top:16px}
 
 .logs-section{margin-bottom:16px}.log-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(480px,1fr));gap:14px}
-.log-item{border:1px solid #30363d;border-radius:8px;overflow:hidden}
-.log-header{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;background:#161b22;border-bottom:1px solid #30363d}
-.log-container{max-height:350px;overflow-y:auto;padding:10px 14px;background:#0d1117}
-.log-content{white-space:pre-wrap;font-family:'Cascadia Code','Fira Code','Consolas',monospace;font-size:12px;color:#c9d1d9;margin:0;line-height:1.6}
+.log-item{border:1px solid #dcdfe6;border-radius:8px;overflow:hidden}
+.log-header{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;background:#f5f7fa;border-bottom:1px solid #dcdfe6}
+.log-container{max-height:350px;overflow-y:auto;padding:10px 14px;background:#fff}
+.log-content{white-space:pre-wrap;font-family:'Cascadia Code','Fira Code','Consolas',monospace;font-size:12px;color:#303133;margin:0;line-height:1.6}
 
 .filter-card :deep(.el-card__body){padding:14px 18px}
 .filter-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
