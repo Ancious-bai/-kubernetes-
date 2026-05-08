@@ -324,6 +324,12 @@ public class TrainingSchedulerService {
             String jobId = yoloService.startTraining(dataName, task.getEpochs(), task.getImgsz(), recordName);
 
             while (!Thread.currentThread().isInterrupted()) {
+                if (!trainingRecordRepository.existsByRecordName(recordName)) {
+                    System.out.println("训练记录已删除，停止监控: " + recordName);
+                    yoloService.removeJobStatus(jobId);
+                    break;
+                }
+
                 var status = yoloService.getJobStatus(jobId);
                 if (status != null) {
                     taskProgressMap.put(recordName, status.getProgress());
@@ -345,6 +351,11 @@ public class TrainingSchedulerService {
                         }
                         break;
                     }
+                } else {
+                    if (!trainingRecordRepository.existsByRecordName(recordName)) {
+                        System.out.println("训练记录已删除且JobStatus已清理: " + recordName);
+                        break;
+                    }
                 }
                 Thread.sleep(1000);
             }
@@ -355,9 +366,33 @@ public class TrainingSchedulerService {
         } finally {
             synchronized (this) {
                 runningTasks.remove(task);
+                taskStatusMap.remove(recordName);
+                taskProgressMap.remove(recordName);
                 notifyNewTask();
             }
         }
+    }
+
+    public synchronized void cancelTask(String recordName) {
+        taskQueue.removeIf(task -> {
+            if (task.getRecordName().equals(recordName)) {
+                System.out.println("任务已从队列移除: " + recordName);
+                return true;
+            }
+            return false;
+        });
+
+        runningTasks.removeIf(task -> {
+            if (task.getRecordName().equals(recordName)) {
+                System.out.println("运行中任务已标记取消: " + recordName);
+                return true;
+            }
+            return false;
+        });
+
+        taskStatusMap.remove(recordName);
+        taskProgressMap.remove(recordName);
+        notifyNewTask();
     }
 
     public synchronized void notifyNewTask() {

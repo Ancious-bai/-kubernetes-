@@ -7,10 +7,12 @@ import com.example.yoloproject.entity.TrainingRecord;
 import com.example.yoloproject.repository.DatasetRepository;
 import com.example.yoloproject.repository.TrainingRecordRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -45,6 +47,10 @@ public class YoloService {
 
     @Autowired
     private TransactionTemplate transactionTemplate;
+
+    @Autowired
+    @Lazy
+    private TrainingSchedulerService trainingSchedulerService;
 
     public String getProjectRoot() {
         return PROJECT_ROOT;
@@ -123,6 +129,7 @@ public class YoloService {
         trainingRecordRepository.save(record);
 
         executorService.submit(() -> {
+            String podName = null;
             try {
                 String yamlPath = PROJECT_ROOT + "\\k8s_jobs\\" + recordName + "-train.yaml";
 
@@ -137,10 +144,7 @@ public class YoloService {
                     logBuilder.append("错误: YAML文件不存在: ").append(yamlPath).append("\n");
                     logBuilder.append("请先执行预处理操作生成配置文件\n");
                     updateStatus(jobId, "FAILED", 0, logBuilder.toString());
-                    trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-                        r.setTrainStatus("FAILED");
-                        trainingRecordRepository.save(r);
-                    });
+                    setTrainFinalStatus(recordName, "FAILED", null);
                     return;
                 }
 
@@ -158,7 +162,6 @@ public class YoloService {
                 int exitCode = process.waitFor();
 
                 if (exitCode == 0) {
-                    String podName = null;
                     for (int i = 0; i < 20; i++) {
                         try {
                             Thread.sleep(500);
@@ -227,7 +230,7 @@ public class YoloService {
                         String finalLog = fullLog != null ? fullLog : "";
                         String finalLogLower = finalLog.toLowerCase();
 
-                        boolean hasFatalError = finalLogLower.contains("fatal error") || finalLogLower.contains("traceback");
+                        boolean hasFatalError = finalLogLower.contains("fatal error") && !finalLogLower.contains("keyboardinterrupt");
                         boolean hasSuccessIndicators = finalLogLower.contains("results saved") ||
                             finalLogLower.contains("speed:") ||
                             finalLogLower.contains("map50") ||
@@ -241,43 +244,43 @@ public class YoloService {
                             String finalLogStr = finalLog + "\nTraining completed successfully\n";
                             updateStatus(jobId, "COMPLETED", 100, finalLogStr, finalPodName);
                             persistTrainLog(recordName, finalLogStr);
-                            trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-                                r.setTrainStatus("COMPLETED");
-                                r.setTrainProgress(100);
-                                r.setTrainPodName(finalPodName);
-                                trainingRecordRepository.save(r);
-                            });
+                            setTrainFinalStatus(recordName, "COMPLETED", finalPodName, 100);
                         } else {
-                            String finalLogStr = finalLog + "\nTraining failed\n";
-                            updateStatus(jobId, "FAILED", 0, finalLogStr, finalPodName);
-                            persistTrainLog(recordName, finalLogStr);
-                            trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-                                r.setTrainStatus("FAILED");
-                                trainingRecordRepository.save(r);
-                            });
+                            String actualPhase = checkPodActualPhase(finalPodName);
+                            if ("Succeeded".equals(actualPhase)) {
+                                String finalLogStr = finalLog + "\nTraining completed (Pod Succeeded)\n";
+                                updateStatus(jobId, "COMPLETED", 100, finalLogStr, finalPodName);
+                                persistTrainLog(recordName, finalLogStr);
+                                setTrainFinalStatus(recordName, "COMPLETED", finalPodName, 100);
+                            } else {
+                                String finalLogStr = finalLog + "\nTraining failed\n";
+                                updateStatus(jobId, "FAILED", 0, finalLogStr, finalPodName);
+                                persistTrainLog(recordName, finalLogStr);
+                                setTrainFinalStatus(recordName, "FAILED", finalPodName);
+                            }
                         }
                     } else {
                         logBuilder.append("Failed to find pod\n");
                         updateStatus(jobId, "FAILED", 0, logBuilder.toString());
-                        trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-                            r.setTrainStatus("FAILED");
-                            trainingRecordRepository.save(r);
-                        });
+                        setTrainFinalStatus(recordName, "FAILED", null);
                     }
                 } else {
-                    logBuilder.append("Training job submission failed\n");
+                    logBuilder.append("Training job submission failed: ").append(processOutput).append("\n");
                     updateStatus(jobId, "FAILED", 0, logBuilder.toString());
-                    trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-                        r.setTrainStatus("FAILED");
-                        trainingRecordRepository.save(r);
-                    });
+                    setTrainFinalStatus(recordName, "FAILED", null);
                 }
             } catch (Exception e) {
-                updateStatus(jobId, "FAILED", 0, "Error: " + e.getMessage());
-                trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-                    r.setTrainStatus("FAILED");
-                    trainingRecordRepository.save(r);
-                });
+                String actualPhase = (podName != null) ? checkPodActualPhase(podName) : null;
+                if ("Succeeded".equals(actualPhase)) {
+                    String fullLog = getPodLogs(podName);
+                    String finalLogStr = (fullLog != null ? fullLog : "") + "\nTraining completed despite exception (Pod Succeeded)\n";
+                    updateStatus(jobId, "COMPLETED", 100, finalLogStr, podName);
+                    persistTrainLog(recordName, finalLogStr);
+                    setTrainFinalStatus(recordName, "COMPLETED", podName, 100);
+                } else {
+                    updateStatus(jobId, "FAILED", 0, "Error: " + e.getMessage());
+                    setTrainFinalStatus(recordName, "FAILED", podName);
+                }
             }
         });
 
@@ -296,6 +299,7 @@ public class YoloService {
         });
 
         executorService.submit(() -> {
+            String podName = null;
             try {
                 String yamlPath = PROJECT_ROOT + "\\k8s_jobs\\" + recordName + "-test.yaml";
 
@@ -310,10 +314,7 @@ public class YoloService {
                     logBuilder.append("错误: YAML文件不存在: ").append(yamlPath).append("\n");
                     logBuilder.append("请先执行训练操作生成配置文件\n");
                     updateStatus(jobId, "FAILED", 0, logBuilder.toString());
-                    trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-                        r.setTestStatus("FAILED");
-                        trainingRecordRepository.save(r);
-                    });
+                    setTestFinalStatus(recordName, "FAILED", null);
                     return;
                 }
 
@@ -333,7 +334,6 @@ public class YoloService {
                 if (exitCode == 0) {
                     Thread.sleep(2000);
 
-                    String podName = null;
                     for (int i = 0; i < 30; i++) {
                         try {
                             Thread.sleep(1000);
@@ -386,7 +386,7 @@ public class YoloService {
                         String finalLog = fullLog != null ? fullLog : "";
                         String finalLogLower = finalLog.toLowerCase();
 
-                        boolean hasFatalError = finalLogLower.contains("fatal error") || finalLogLower.contains("traceback");
+                        boolean hasFatalError = finalLogLower.contains("fatal error") && !finalLogLower.contains("keyboardinterrupt");
                         boolean hasSuccessIndicators = finalLogLower.contains("map") ||
                             finalLogLower.contains("precision") ||
                             finalLogLower.contains("recall") ||
@@ -400,41 +400,43 @@ public class YoloService {
                             String finalLogStr = finalLog + "\nTesting completed successfully\n";
                             updateStatus(jobId, "COMPLETED", 100, finalLogStr, finalPodName);
                             persistTestLog(recordName, finalLogStr);
-                            trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-                                r.setTestStatus("COMPLETED");
-                                trainingRecordRepository.save(r);
-                            });
+                            setTestFinalStatus(recordName, "COMPLETED", finalPodName);
                         } else {
-                            String finalLogStr = finalLog + "\nTesting failed\n";
-                            updateStatus(jobId, "FAILED", 0, finalLogStr, finalPodName);
-                            persistTestLog(recordName, finalLogStr);
-                            trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-                                r.setTestStatus("FAILED");
-                                trainingRecordRepository.save(r);
-                            });
+                            String actualPhase = checkPodActualPhase(finalPodName);
+                            if ("Succeeded".equals(actualPhase)) {
+                                String finalLogStr = finalLog + "\nTesting completed (Pod Succeeded)\n";
+                                updateStatus(jobId, "COMPLETED", 100, finalLogStr, finalPodName);
+                                persistTestLog(recordName, finalLogStr);
+                                setTestFinalStatus(recordName, "COMPLETED", finalPodName);
+                            } else {
+                                String finalLogStr = finalLog + "\nTesting failed\n";
+                                updateStatus(jobId, "FAILED", 0, finalLogStr, finalPodName);
+                                persistTestLog(recordName, finalLogStr);
+                                setTestFinalStatus(recordName, "FAILED", finalPodName);
+                            }
                         }
                     } else {
                         logBuilder.append("Failed to find pod\n");
                         updateStatus(jobId, "FAILED", 0, logBuilder.toString());
-                        trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-                            r.setTestStatus("FAILED");
-                            trainingRecordRepository.save(r);
-                        });
+                        setTestFinalStatus(recordName, "FAILED", null);
                     }
                 } else {
-                    logBuilder.append("Testing job submission failed\n");
+                    logBuilder.append("Testing job submission failed: ").append(processOutput).append("\n");
                     updateStatus(jobId, "FAILED", 0, logBuilder.toString());
-                    trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-                        r.setTestStatus("FAILED");
-                        trainingRecordRepository.save(r);
-                    });
+                    setTestFinalStatus(recordName, "FAILED", null);
                 }
             } catch (Exception e) {
-                updateStatus(jobId, "FAILED", 0, "Error: " + e.getMessage());
-                trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-                    r.setTestStatus("FAILED");
-                    trainingRecordRepository.save(r);
-                });
+                String actualPhase = (podName != null) ? checkPodActualPhase(podName) : null;
+                if ("Succeeded".equals(actualPhase)) {
+                    String fullLog = getPodLogs(podName);
+                    String finalLogStr = (fullLog != null ? fullLog : "") + "\nTesting completed despite exception (Pod Succeeded)\n";
+                    updateStatus(jobId, "COMPLETED", 100, finalLogStr, podName);
+                    persistTestLog(recordName, finalLogStr);
+                    setTestFinalStatus(recordName, "COMPLETED", podName);
+                } else {
+                    updateStatus(jobId, "FAILED", 0, "Error: " + e.getMessage());
+                    setTestFinalStatus(recordName, "FAILED", podName);
+                }
             }
         });
 
@@ -511,6 +513,58 @@ public class YoloService {
         return jobStatusMap.get(jobId);
     }
 
+    public void removeJobStatus(String jobId) {
+        if (jobId != null) {
+            jobStatusMap.remove(jobId);
+        }
+    }
+
+    private void setTrainFinalStatus(String recordName, String status, String podName) {
+        setTrainFinalStatus(recordName, status, podName, "COMPLETED".equals(status) ? 100 : 0);
+    }
+
+    private void setTrainFinalStatus(String recordName, String status, String podName, int progress) {
+        try {
+            trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
+                r.setTrainStatus(status);
+                r.setTrainProgress(progress);
+                if (podName != null) {
+                    r.setTrainPodName(podName);
+                }
+                trainingRecordRepository.save(r);
+            });
+        } catch (Exception e) {
+            System.out.println("设置训练最终状态失败: " + recordName + " -> " + status + ": " + e.getMessage());
+        }
+    }
+
+    private void setTestFinalStatus(String recordName, String status, String podName) {
+        try {
+            trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
+                r.setTestStatus(status);
+                if (podName != null) {
+                    r.setTestPodName(podName);
+                }
+                trainingRecordRepository.save(r);
+            });
+        } catch (Exception e) {
+            System.out.println("设置测试最终状态失败: " + recordName + " -> " + status + ": " + e.getMessage());
+        }
+    }
+
+    private String checkPodActualPhase(String podName) {
+        if (podName == null || podName.isEmpty()) return null;
+        try {
+            Process checkProcess = new ProcessBuilder("kubectl", "get", "pod", podName, "-o", "jsonpath={.status.phase}").start();
+            BufferedReader checkReader = new BufferedReader(new InputStreamReader(checkProcess.getInputStream(), StandardCharsets.UTF_8));
+            String phase = checkReader.readLine();
+            checkProcess.waitFor();
+            return phase;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     public Map<String, JobStatus> getJobStatusMap() {
         return jobStatusMap;
     }
@@ -523,6 +577,16 @@ public class YoloService {
             for (TrainingRecord rec : records) {
                 if (rec.getRecordName() != null && !rec.getRecordName().isBlank()) {
                     recordNames.add(rec.getRecordName());
+                    if (rec.getTrainJobId() != null) jobStatusMap.remove(rec.getTrainJobId());
+                    if (rec.getTestJobId() != null) jobStatusMap.remove(rec.getTestJobId());
+                }
+            }
+
+            for (String recName : recordNames) {
+                try {
+                    trainingSchedulerService.cancelTask(recName);
+                } catch (Exception e) {
+                    System.out.println("通知调度器取消任务(可忽略): " + recName + " - " + e.getMessage());
                 }
             }
 
@@ -558,6 +622,22 @@ public class YoloService {
         if (!trainingRecordRepository.existsByRecordName(recordName)) {
             return false;
         }
+
+        trainingRecordRepository.findByRecordName(recordName).ifPresent(record -> {
+            if (record.getTrainJobId() != null) {
+                jobStatusMap.remove(record.getTrainJobId());
+            }
+            if (record.getTestJobId() != null) {
+                jobStatusMap.remove(record.getTestJobId());
+            }
+        });
+
+        try {
+            trainingSchedulerService.cancelTask(recordName);
+        } catch (Exception e) {
+            System.out.println("通知调度器取消任务(可忽略): " + e.getMessage());
+        }
+
         try {
             transactionTemplate.executeWithoutResult(status -> trainingRecordRepository.deleteByRecordName(recordName));
         } catch (Exception e) {
