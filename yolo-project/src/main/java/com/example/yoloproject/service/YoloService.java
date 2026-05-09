@@ -129,14 +129,21 @@ public class YoloService {
                     while (true) {
                         try {
                             Thread.sleep(2000);
-                            String tailLog = k8sClientService.getPodLogs(finalPodName, 20);
-                            if (tailLog != null && !tailLog.isEmpty()) {
-                                updateStatus(jobId, "RUNNING", 50, tailLog);
-                            }
-
                             String phase = k8sClientService.getPodPhase(finalPodName);
+                            
                             if ("Succeeded".equals(phase) || "Failed".equals(phase) || "NOT_FOUND".equals(phase)) {
                                 break;
+                            }
+                            
+                            if ("Running".equals(phase) || "Pending".equals(phase)) {
+                                try {
+                                    String tailLog = k8sClientService.getPodLogs(finalPodName, 20);
+                                    if (tailLog != null && !tailLog.isEmpty()) {
+                                        updateStatus(jobId, "RUNNING", 50, tailLog);
+                                    }
+                                } catch (Exception logEx) {
+                                    updateStatus(jobId, "RUNNING", 50, "Pod is starting... (" + phase + ")\n");
+                                }
                             }
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
@@ -144,7 +151,12 @@ public class YoloService {
                         }
                     }
 
-                    String fullLog = k8sClientService.getPodLogs(finalPodName);
+                    String fullLog = "";
+                    try {
+                        fullLog = k8sClientService.getPodLogs(finalPodName);
+                    } catch (Exception e) {
+                        fullLog = "Could not retrieve pod logs";
+                    }
                     String finalLog = fullLog != null ? fullLog : "";
                     String actualPhase = k8sClientService.getPodPhase(finalPodName);
 
@@ -155,7 +167,7 @@ public class YoloService {
                             datasetRepository.save(d);
                         });
                     } else {
-                        updateStatus(jobId, "FAILED", 0, finalLog + "\nPreprocess failed\n");
+                        updateStatus(jobId, "FAILED", 0, finalLog + "\nPreprocess failed (pod phase: " + actualPhase + ")\n");
                         deleteDataset(dataName);
                     }
                 } else {
@@ -698,6 +710,14 @@ public class YoloService {
                 logBuilder.append("Deleted preprocessed directory: ").append(processedDir).append("\n");
             } catch (Exception e) {
                 logBuilder.append("Failed to delete preprocessed directory (manual delete): ").append(e.getMessage()).append("\n");
+            }
+
+            String rawDir = PROJECT_ROOT + dataName;
+            try {
+                deleteDirectory(new File(rawDir));
+                logBuilder.append("Deleted raw data directory: ").append(rawDir).append("\n");
+            } catch (Exception e) {
+                logBuilder.append("Failed to delete raw data directory (manual delete): ").append(e.getMessage()).append("\n");
             }
 
             return logBuilder.toString();

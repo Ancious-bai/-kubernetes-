@@ -94,7 +94,7 @@ public class YoloController {
             Files.createDirectories(uploadDir);
 
             if (originalFilename.toLowerCase().endsWith(".zip")) {
-                extractZipFile(file, uploadDir.toString());
+                extractZipFileSmart(file, uploadDir.toString());
             } else {
                 Path targetFile = uploadDir.resolve(originalFilename);
                 Files.copy(file.getInputStream(), targetFile);
@@ -120,70 +120,66 @@ public class YoloController {
         }
     }
 
-    private void extractZipFile(MultipartFile zipFile, String targetDir) throws IOException {
+    private void extractZipFileSmart(MultipartFile zipFile, String targetDir) throws IOException {
+        Path targetPath = Paths.get(targetDir);
         try (ZipInputStream zis = new ZipInputStream(zipFile.getInputStream())) {
             ZipEntry entry;
-            while ((entry = zis.getNextEntry()) != null) {
-                Path entryPath = Paths.get(targetDir, entry.getName());
+            boolean hasSingleRootDir = true;
+            String rootDirName = null;
+            java.util.List<String> allEntries = new java.util.ArrayList<>();
 
-                if (entryPath.normalize().startsWith(Paths.get(targetDir).normalize())) {
-                    if (entry.isDirectory()) {
-                        Files.createDirectories(entryPath);
-                    } else {
-                        Files.createDirectories(entryPath.getParent());
-                        Files.copy(zis, entryPath);
-                    }
-                }
+            while ((entry = zis.getNextEntry()) != null) {
+                allEntries.add(entry.getName());
                 zis.closeEntry();
             }
-        }
-    }
 
-    @GetMapping("/datasets/browse")
-    public ResponseEntity<Map<String, Object>> browsePvcDirectory(
-            @RequestParam(value = "path", required = false) String subPath) {
-
-        Map<String, Object> response = new HashMap<>();
-        try {
-            String workspaceDir = projectRoot.replace("\\", "/");
-            if (!workspaceDir.endsWith("/")) workspaceDir += "/";
-
-            String browsePath = workspaceDir;
-            if (subPath != null && !subPath.isBlank()) {
-                browsePath = workspaceDir + subPath;
-            }
-
-            File dir = new File(browsePath);
-            if (!dir.exists() || !dir.isDirectory()) {
-                response.put("status", "error");
-                response.put("message", "目录不存在: " + browsePath);
-                return ResponseEntity.ok(response);
-            }
-
-            List<Map<String, Object>> items = new java.util.ArrayList<>();
-            File[] files = dir.listFiles();
-            if (files != null) {
-                for (File f : files) {
-                    Map<String, Object> item = new HashMap<>();
-                    item.put("name", f.getName());
-                    item.put("isDirectory", f.isDirectory());
-                    item.put("path", f.getAbsolutePath().replace("\\", "/"));
-                    if (!f.isDirectory()) {
-                        item.put("size", f.length());
-                    }
-                    items.add(item);
+            for (String name : allEntries) {
+                if (!name.contains("/")) {
+                    hasSingleRootDir = false;
+                    break;
+                }
+                String firstPart = name.split("/")[0];
+                if (rootDirName == null) {
+                    rootDirName = firstPart;
+                } else if (!rootDirName.equals(firstPart)) {
+                    hasSingleRootDir = false;
+                    break;
                 }
             }
 
-            response.put("status", "success");
-            response.put("path", browsePath);
-            response.put("items", items);
-            return ResponseEntity.ok(response);
+            if (rootDirName == null) return;
 
-        } catch (Exception e) {
-            response.put("status", "error");
-            response.put("message", e.getMessage());
-            return ResponseEntity.ok(response);
+            try (ZipInputStream zis2 = new ZipInputStream(zipFile.getInputStream())) {
+                while ((entry = zis2.getNextEntry()) != null) {
+                    String entryName = entry.getName();
+
+                    if (hasSingleRootDir) {
+                        if (entryName.startsWith(rootDirName + "/")) {
+                            entryName = entryName.substring(rootDirName.length() + 1);
+                        } else if (entryName.equals(rootDirName + "/") || entryName.equals(rootDirName)) {
+                            zis2.closeEntry();
+                            continue;
+                        }
+                    }
+
+                    if (entryName.isEmpty()) {
+                        zis2.closeEntry();
+                        continue;
+                    }
+
+                    Path entryPath = Paths.get(targetDir, entryName);
+
+                    if (entryPath.normalize().startsWith(targetPath.normalize())) {
+                        if (entry.isDirectory()) {
+                            Files.createDirectories(entryPath);
+                        } else {
+                            Files.createDirectories(entryPath.getParent());
+                            Files.copy(zis2, entryPath);
+                        }
+                    }
+                    zis2.closeEntry();
+                }
+            }
         }
     }
 
@@ -194,7 +190,7 @@ public class YoloController {
 
         if (inputDir == null || inputDir.isBlank()) {
             Map<String, String> response = new HashMap<>();
-            response.put("message", "数据路径不能为空");
+            response.put("message", "数据集名称不能为空");
             return ResponseEntity.badRequest().body(response);
         }
 
