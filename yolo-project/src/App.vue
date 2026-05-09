@@ -37,8 +37,7 @@
           <el-card shadow="hover" class="top-card dataset-card-top">
             <template #header><span class="card-title">添加数据集</span></template>
             <div class="input-row">
-              <el-input v-model="form.inputDir" placeholder="输入数据集名称（如 cat-dataset）或 PVC 路径" @keyup.enter="handleAddDataset" size="large" clearable class="input-flex" />
-              <el-button type="info" @click="browsePvcFolder('input')">浏览PVC</el-button>
+              <el-input v-model="form.inputDir" placeholder="输入数据集名称（如 cat-dataset）" @keyup.enter="handleAddDataset" size="large" clearable class="input-flex" />
               <el-button type="primary" @click="handleAddDataset" :loading="currentStep==='addDataset'">添加</el-button>
             </div>
             <div class="input-row" style="margin-top:8px">
@@ -50,15 +49,6 @@
             <div class="drop-zone" :class="{'drop-zone-active':isDragOver}" @dragover.prevent="isDragOver=true" @dragleave.prevent="isDragOver=false" @drop.prevent="handleDrop">
               <div class="drop-zone-text"><el-icon size="28"><UploadFilled /></el-icon><span>拖拽 ZIP 文件到此处上传数据集</span></div>
             </div>
-            <el-dialog title="浏览 PVC 目录" v-model="pvcBrowserVisible" width="600px">
-              <div style="margin-bottom:10px"><el-button size="small" @click="browsePvcPath('')">根目录</el-button><span style="margin-left:10px;color:#666">{{ pvcBrowserCurrentPath }}</span></div>
-              <el-table :data="pvcBrowserItems" max-height="400" @row-dblclick="row=>{if(row.isDirectory)browsePvcPath(row.name)}" highlight-current-row @current-change="selectPvcItem">
-                <el-table-column prop="name" label="名称" />
-                <el-table-column prop="isDirectory" label="类型" width="80"><template #default="{row}">{{ row.isDirectory?'文件夹':'文件' }}</template></el-table-column>
-                <el-table-column prop="size" label="大小" width="100"><template #default="{row}">{{ row.isDirectory?'-':(row.size>1048576?(row.size/1048576).toFixed(1)+'MB':(row.size/1024).toFixed(1)+'KB') }}</template></el-table-column>
-              </el-table>
-              <template #footer><el-button @click="pvcBrowserVisible=false">取消</el-button><el-button type="primary" @click="confirmPvcSelection">选择此目录</el-button></template>
-            </el-dialog>
           </el-card>
           <el-card shadow="hover" class="top-card config-card-top">
             <template #header><span class="card-title">全局配置</span></template>
@@ -202,7 +192,7 @@
       <el-form :model="saveModelForm" label-width="80px">
         <el-form-item label="记录"><el-tag type="success">{{ saveModelForm.recordName }}</el-tag></el-form-item>
         <el-form-item label="类型"><el-radio-group v-model="saveModelForm.modelType"><el-radio label="best">最佳模型(best.pt)</el-radio><el-radio label="last">最后模型(last.pt)</el-radio></el-radio-group></el-form-item>
-        <el-form-item label="保存路径"><div class="save-path-row"><el-input v-model="saveModelForm.savePath" placeholder="默认项目saved_models目录" /><el-button type="info" @click="browsePvcFolder('save')">浏览PVC</el-button></div></el-form-item>
+        <el-form-item label="保存路径"><div class="save-path-row"><el-input v-model="saveModelForm.savePath" placeholder="默认项目saved_models目录" /></div></el-form-item>
       </el-form>
       <template #footer><el-button type="primary" @click="confirmSaveModel" :loading="saveModelLoading">保存</el-button></template>
     </el-dialog>
@@ -289,13 +279,6 @@ const pagedLogList=computed(()=>{const s=(logPage.value-1)*logPageSize.value;ret
 const filteredUserList=computed(()=>{let list=[...userList.value];if(userSearch.value){const kw=userSearch.value.toLowerCase();list=list.filter(u=>u.username.toLowerCase().includes(kw))}if(userRoleFilter.value){list=list.filter(u=>u.role===userRoleFilter.value)}return list})
 
 const looksLikeFullDatasetPath=(p)=>{if(!p||typeof p!=='string')return false;const t=p.trim();if(t.length<1)return false;if(t.startsWith('/'))return t.split('/').filter(Boolean).length>=1;return t.length>=1}
-
-const pvcBrowserVisible=ref(false),pvcBrowserItems=ref([]),pvcBrowserCurrentPath=ref(''),pvcBrowserTarget=ref('input'),pvcSelectedPath=ref('')
-
-const browsePvcFolder=(target)=>{pvcBrowserTarget.value=target;pvcBrowserCurrentPath.value='';pvcBrowserItems.value=[];pvcSelectedPath.value='';browsePvcPath('');pvcBrowserVisible.value=true}
-const browsePvcPath=async(subPath)=>{try{const r=await api.value.get('/api/datasets/browse',{params:{path:subPath}});if(r.data.status==='success'){pvcBrowserItems.value=r.data.items||[];pvcBrowserCurrentPath.value=r.data.path}else{showMsg(r.data.message||'浏览失败','error')}}catch(e){showMsg('浏览PVC失败','error')}}
-const selectPvcItem=(row)=>{if(row)pvcSelectedPath.value=row.path}
-const confirmPvcSelection=()=>{if(pvcBrowserTarget.value==='input')form.inputDir=pvcSelectedPath.value||pvcBrowserCurrentPath.value;else if(pvcBrowserTarget.value==='save')saveModelForm.savePath=pvcSelectedPath.value||pvcBrowserCurrentPath.value;pvcBrowserVisible.value=false}
 
 const handleFileUpload=async(file)=>{const dataName=file.name.replace(/\.zip$/i,'');currentStep.value='addDataset';try{const formData=new FormData();formData.append('file',file);formData.append('dataName',dataName);const r=await api.value.post('/api/datasets/upload',formData,{headers:{'Content-Type':'multipart/form-data'},timeout:300000});showMsg(`数据集 ${dataName} 上传成功`);await refreshDatasets();await loadTrainingRecords()}catch(e){showMsg(`上传失败: ${e.response?.data?.message||e.message}`,'error')}finally{currentStep.value='';return false}}
 const canEditUserRole=(row)=>{if(!row||row.role==='ROOT')return false;if(currentUser.username===row.username)return false;if(currentUser.role==='ROOT')return true;if(currentUser.role==='ADMIN'&&row.role==='USER')return true;return false}

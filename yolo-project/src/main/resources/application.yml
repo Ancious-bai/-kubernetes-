@@ -2,6 +2,10 @@ server:
   port: 8080
 
 spring:
+  servlet:
+    multipart:
+      max-file-size: 2GB
+      max-request-size: 2GB
   datasource:
     url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:k8s_yolo_db}?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
     driver-class-name: com.mysql.cj.jdbc.Driver
