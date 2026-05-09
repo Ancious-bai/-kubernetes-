@@ -104,8 +104,8 @@ public class YoloService {
     private void startPreprocessAsK8sJob(String jobId, String inputDir) {
         executorService.submit(() -> {
             String podName = null;
+            String dataName = new File(inputDir).getName();
             try {
-                String dataName = new File(inputDir).getName();
                 String preprocessJobName = dataName + "-preprocess-job";
 
                 k8sClientService.deleteJob(preprocessJobName);
