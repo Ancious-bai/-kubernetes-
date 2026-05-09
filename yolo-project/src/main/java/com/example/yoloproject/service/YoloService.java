@@ -160,13 +160,11 @@ public class YoloService {
                     }
                 } else {
                     updateStatus(jobId, "FAILED", 0, "Failed to find pod for preprocess job");
-                    String dataName = new File(inputDir).getName();
                     deleteDataset(dataName);
                 }
             } catch (Exception e) {
                 log.error("Preprocess K8s job exception: {}", e.getMessage(), e);
                 updateStatus(jobId, "FAILED", 0, "Error: " + e.getMessage());
-                String dataName = new File(inputDir).getName();
                 deleteDataset(dataName);
             }
         });
