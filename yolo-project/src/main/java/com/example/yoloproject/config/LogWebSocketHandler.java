@@ -2,13 +2,15 @@ package com.example.yoloproject.config;
 
 import com.example.yoloproject.entity.TrainingRecord;
 import com.example.yoloproject.repository.TrainingRecordRepository;
+import com.example.yoloproject.service.K8sClientService;
 import com.example.yoloproject.service.YoloService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.*;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -19,17 +21,22 @@ import java.util.concurrent.*;
 @Component
 public class LogWebSocketHandler extends TextWebSocketHandler {
 
+    private static final Logger log = LoggerFactory.getLogger(LogWebSocketHandler.class);
+
     private final TrainingRecordRepository trainingRecordRepository;
     private final YoloService yoloService;
+    private final K8sClientService k8sClientService;
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final ScheduledExecutorService retryExecutor = Executors.newScheduledThreadPool(4);
-    private final Map<String, Process> activeProcesses = new ConcurrentHashMap<>();
     private final Map<String, StringBuilder> logBuilders = new ConcurrentHashMap<>();
     private final Map<String, ScheduledFuture<?>> retryTasks = new ConcurrentHashMap<>();
 
-    public LogWebSocketHandler(TrainingRecordRepository trainingRecordRepository, YoloService yoloService) {
+    public LogWebSocketHandler(TrainingRecordRepository trainingRecordRepository,
+                               YoloService yoloService,
+                               K8sClientService k8sClientService) {
         this.trainingRecordRepository = trainingRecordRepository;
         this.yoloService = yoloService;
+        this.k8sClientService = k8sClientService;
     }
 
     @Override
@@ -134,10 +141,10 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
 
     private void loadSavedLog(WebSocketSession session, String recordName, String type) {
         try {
-            Path path = Paths.get(YoloService.LOGS_DIR, recordName + "-" + type + ".txt");
+            Path path = Paths.get(yoloService.LOGS_DIR, recordName + "-" + type + ".txt");
             if (Files.exists(path)) {
-                String log = Files.readString(path, StandardCharsets.UTF_8);
-                sendMessage(session, log);
+                String logContent = Files.readString(path, StandardCharsets.UTF_8);
+                sendMessage(session, logContent);
             } else {
                 boolean isTraining = "train".equals(type);
                 TrainingRecord record = trainingRecordRepository.findByRecordName(recordName).orElse(null);
@@ -145,7 +152,7 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
                     String podName = isTraining ? record.getTrainPodName() : record.getTestPodName();
                     if (podName != null && !podName.isEmpty()) {
                         String podLog = yoloService.getPodLogs(podName);
-                        if (podLog != null && !podLog.isEmpty() && !podLog.startsWith("Error:") && !podLog.startsWith("获取日志中")) {
+                        if (podLog != null && !podLog.isEmpty() && !podLog.startsWith("Error")) {
                             sendMessage(session, podLog);
                             saveLog(recordName, type, podLog);
                             try { session.close(); } catch (Exception ignored) {}
@@ -178,74 +185,52 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
         boolean isTraining = "train".equals(type);
         String typeLabel = isTraining ? "训练" : "测试";
 
-        executor.submit(() -> {
-            int retryCount = 0;
-            int maxRetries = 30;
+        sendMessage(session, typeLabel + "状态: Running\nPod: " + podName + "\n开始获取实时日志...\n");
+        startPollingLogStream(session, recordName, type, podName);
+    }
 
-            while (retryCount < maxRetries && session.isOpen()) {
-                try {
-                    ProcessBuilder pb = new ProcessBuilder("kubectl", "logs", "-f", podName);
-                    pb.redirectErrorStream(true);
-                    Process process = pb.start();
-                    activeProcesses.put(logKey, process);
+    private void startPollingLogStream(WebSocketSession session, String recordName, String type, String podName) {
+        String logKey = recordName + "-" + type;
+        StringBuilder logBuilder = logBuilders.get(logKey);
+        java.util.concurrent.atomic.AtomicInteger lastLineCount = new java.util.concurrent.atomic.AtomicInteger(0);
 
-                    BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
-                    String line;
-                    StringBuilder logBuilder = logBuilders.get(logKey);
-                    boolean gotRealLog = false;
-
-                    while ((line = reader.readLine()) != null && session.isOpen()) {
-                        if (line.contains("ContainerCreating") || line.contains("container in pod") && line.contains("waiting to start")) {
-                            retryCount++;
-                            if (retryCount < maxRetries) {
-                                sendMessage(session, typeLabel + "状态: Running\n容器初始化中... (" + retryCount + "/" + maxRetries + ")\n");
-                                process.destroy();
-                                activeProcesses.remove(logKey);
-                                Thread.sleep(3000);
-                                break;
-                            } else {
-                                String logLine = line + "\n";
-                                logBuilder.append(logLine);
-                                sendMessage(session, logLine);
-                                gotRealLog = true;
-                            }
-                        } else {
-                            String logLine = line + "\n";
-                            logBuilder.append(logLine);
-                            sendMessage(session, logLine);
-                            gotRealLog = true;
-                        }
-                    }
-
-                    if (gotRealLog || retryCount >= maxRetries) {
-                        saveLog(recordName, type, logBuilder.toString());
-                        process.waitFor();
-                        activeProcesses.remove(logKey);
-
-                        try {
-                            if (session.isOpen()) {
-                                session.close();
-                            }
-                        } catch (Exception e) {
-                        }
-                        return;
-                    }
-
-                } catch (Exception e) {
-                    retryCount++;
-                    if (retryCount >= maxRetries) {
-                        sendMessage(session, "读取日志出错: " + e.getMessage() + "\n");
-                        StringBuilder logBuilder = logBuilders.get(logKey);
-                        if (logBuilder != null && logBuilder.length() > 0) {
-                            saveLog(recordName, type, logBuilder.toString());
-                        }
-                        try { if (session.isOpen()) session.close(); } catch (Exception ignored) {}
-                        return;
-                    }
-                    try { Thread.sleep(3000); } catch (InterruptedException ie) { return; }
+        ScheduledFuture<?> pollFuture = retryExecutor.scheduleAtFixedRate(() -> {
+            try {
+                if (!session.isOpen()) {
+                    cancelRetry(logKey);
+                    return;
                 }
+
+                String phase = k8sClientService.getPodPhase(podName);
+                String logs = k8sClientService.getPodLogs(podName);
+
+                if (logs != null && !logs.isEmpty() && !logs.startsWith("Error")) {
+                    String[] lines = logs.split("\n");
+                    int currentCount = lastLineCount.get();
+                    if (lines.length > currentCount) {
+                        StringBuilder newLines = new StringBuilder();
+                        for (int i = currentCount; i < lines.length; i++) {
+                            newLines.append(lines[i]).append("\n");
+                        }
+                        lastLineCount.set(lines.length);
+                        if (logBuilder != null) logBuilder.append(newLines);
+                        sendMessage(session, newLines.toString());
+                    }
+                }
+
+                if ("Succeeded".equals(phase) || "Failed".equals(phase) || "NOT_FOUND".equals(phase)) {
+                    cancelRetry(logKey);
+                    if (logBuilder != null && logBuilder.length() > 0) {
+                        saveLog(recordName, type, logBuilder.toString());
+                    }
+                    try { if (session.isOpen()) session.close(); } catch (Exception ignored) {}
+                }
+            } catch (Exception e) {
+                log.error("Polling log stream error: {}", e.getMessage());
             }
-        });
+        }, 0, 2, TimeUnit.SECONDS);
+
+        retryTasks.put(logKey, pollFuture);
     }
 
     private void saveLog(String recordName, String type, String logContent) {
@@ -254,6 +239,7 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
                 yoloService.saveLogToFile(recordName + "-" + type, logContent);
             }
         } catch (Exception e) {
+            log.error("Failed to save log: {}", e.getMessage());
         }
     }
 
@@ -263,6 +249,7 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
                 session.sendMessage(new TextMessage(message));
             }
         } catch (Exception e) {
+            log.debug("Failed to send WebSocket message: {}", e.getMessage());
         }
     }
 
@@ -279,13 +266,7 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
                 saveLog(recordName, type, logBuilder.toString());
             }
 
-            Process process = activeProcesses.get(logKey);
-            if (process != null && process.isAlive()) {
-                process.destroy();
-            }
-            activeProcesses.remove(logKey);
             logBuilders.remove(logKey);
-
             cancelRetry(logKey);
         }
     }

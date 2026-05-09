@@ -1,0 +1,31 @@
+FROM python:3.10-slim
+
+WORKDIR /app/workspace
+
+RUN apt-get update && apt-get install -y \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libxcb1 \
+    libgl1 \
+    fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /app/workspace/requirements.txt
+
+RUN pip install --no-cache-dir torch torchvision --extra-index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir -r /app/workspace/requirements.txt
+
+COPY train_yolo.py /app/workspace/train_yolo.py
+COPY test_yolo.py /app/workspace/test_yolo.py
+COPY preprocess.py /app/workspace/preprocess.py
+COPY yolov8n.pt /app/workspace/yolov8n.pt
+
+ENV YOLO_CONFIG_DIR=/tmp/Ultralytics
+ENV ULTRALYTICS_DISABLE_AUTOUPDATE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/workspace
+
+CMD ["python3", "--version"]

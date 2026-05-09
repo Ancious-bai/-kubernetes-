@@ -69,4 +69,11 @@ public class AuthController {
         response.put("role", role);
         return ResponseEntity.ok(response);
     }
+
+    @GetMapping("/health")
+    public ResponseEntity<Map<String, String>> health() {
+        Map<String, String> response = new HashMap<>();
+        response.put("status", "UP");
+        return ResponseEntity.ok(response);
+    }
 }

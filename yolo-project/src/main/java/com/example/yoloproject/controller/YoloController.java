@@ -10,20 +10,31 @@ import com.example.yoloproject.repository.TrainingRecordRepository;
 import com.example.yoloproject.service.AuthService;
 import com.example.yoloproject.service.YoloService;
 import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
-import java.awt.HeadlessException;
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 @RestController
 @RequestMapping("/api")
 public class YoloController {
+
+    private static final Logger log = LoggerFactory.getLogger(YoloController.class);
 
     @Autowired
     private YoloService yoloService;
@@ -40,91 +51,167 @@ public class YoloController {
     @Autowired
     private AuthService authService;
 
-    @GetMapping("/dialog/folder")
-    public ResponseEntity<Map<String, String>> openFolderDialog(@RequestParam(required = false) String title) {
-        Map<String, String> response = new HashMap<>();
+    @Value("${app.project-root:./}")
+    private String projectRoot;
 
-        if (java.awt.GraphicsEnvironment.isHeadless()) {
-            response.put("path", "");
-            response.put("status", "error");
-            response.put("message", "Server is running in headless mode");
-            return ResponseEntity.ok(response);
+    @PostMapping("/datasets/upload")
+    public ResponseEntity<Map<String, String>> uploadDataset(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "dataName", required = false) String dataName,
+            HttpServletRequest httpRequest) {
+
+        String username = (String) httpRequest.getAttribute("username");
+
+        if (file.isEmpty()) {
+            Map<String, String> response = new HashMap<>();
+            response.put("message", "上传文件为空");
+            return ResponseEntity.badRequest().body(response);
+        }
+
+        String originalFilename = file.getOriginalFilename();
+        if (originalFilename == null || originalFilename.isBlank()) {
+            originalFilename = "dataset.zip";
+        }
+
+        if (dataName == null || dataName.isBlank()) {
+            dataName = originalFilename.replaceAll("\\.(zip|tar|tar\\.gz|tgz)$", "");
+            dataName = dataName.replaceAll("[^a-zA-Z0-9_\\-\\u4e00-\\u9fa5]", "_");
+            if (dataName.isBlank()) dataName = "dataset_" + System.currentTimeMillis();
+        }
+
+        if (datasetRepository.existsByName(dataName)) {
+            Map<String, String> response = new HashMap<>();
+            response.put("message", "数据集已存在: " + dataName);
+            response.put("dataName", dataName);
+            return ResponseEntity.badRequest().body(response);
         }
 
         try {
-            String dialogTitle = title != null ? title : "选择文件夹";
+            String workspaceDir = projectRoot.replace("\\", "/");
+            if (!workspaceDir.endsWith("/")) workspaceDir += "/";
 
-            String[] result = new String[1];
+            Path uploadDir = Paths.get(workspaceDir, dataName);
+            Files.createDirectories(uploadDir);
 
-            javax.swing.SwingUtilities.invokeAndWait(() -> {
-                javax.swing.JFrame frame = new javax.swing.JFrame();
-                frame.setAlwaysOnTop(true);
-                frame.setUndecorated(true);
-                frame.setLocationRelativeTo(null);
-                frame.setVisible(true);
-
-                javax.swing.JFileChooser fileChooser = new javax.swing.JFileChooser();
-                fileChooser.setFileSelectionMode(javax.swing.JFileChooser.DIRECTORIES_ONLY);
-                fileChooser.setDialogTitle(dialogTitle);
-                fileChooser.setApproveButtonText("选择");
-                fileChooser.setMultiSelectionEnabled(false);
-
-                int userSelection = fileChooser.showOpenDialog(frame);
-                if (userSelection == javax.swing.JFileChooser.APPROVE_OPTION) {
-                    result[0] = fileChooser.getSelectedFile().getAbsolutePath();
-                }
-
-                frame.dispose();
-            });
-
-            if (result[0] != null && !result[0].isEmpty()) {
-                response.put("path", result[0]);
-                response.put("status", "success");
+            if (originalFilename.toLowerCase().endsWith(".zip")) {
+                extractZipFile(file, uploadDir.toString());
             } else {
-                response.put("path", "");
-                response.put("status", "cancelled");
+                Path targetFile = uploadDir.resolve(originalFilename);
+                Files.copy(file.getInputStream(), targetFile);
             }
-        } catch (HeadlessException e) {
-            response.put("path", "");
-            response.put("status", "error");
-            response.put("message", "Headless environment");
-        } catch (Exception e) {
-            response.put("path", "");
-            response.put("status", "error");
-            response.put("message", e.getMessage());
-        }
 
-        return ResponseEntity.ok(response);
+            Dataset dataset = new Dataset(dataName, workspaceDir + dataName, username);
+            datasetRepository.save(dataset);
+
+            authService.logOperation(null, username, "UPLOAD_DATASET", dataName, "上传数据集: " + originalFilename);
+
+            Map<String, String> response = new HashMap<>();
+            response.put("message", "数据集上传成功");
+            response.put("dataName", dataName);
+            response.put("path", workspaceDir + dataName);
+            response.put("status", "success");
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("Failed to upload dataset: {}", e.getMessage(), e);
+            Map<String, String> response = new HashMap<>();
+            response.put("message", "上传失败: " + e.getMessage());
+            return ResponseEntity.status(500).body(response);
+        }
     }
 
-    @PostMapping("/preprocess")
-    public ResponseEntity<Map<String, String>> preprocess(@RequestBody Map<String, Object> request, HttpServletRequest httpRequest) {
-        String dataName = (String) request.get("dataName");
-        String username = (String) httpRequest.getAttribute("username");
+    private void extractZipFile(MultipartFile zipFile, String targetDir) throws IOException {
+        try (ZipInputStream zis = new ZipInputStream(zipFile.getInputStream())) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                Path entryPath = Paths.get(targetDir, entry.getName());
 
-        String inputDir = datasetRepository.findByName(dataName)
-                .map(Dataset::getInputPath)
-                .orElse(dataName);
+                if (entryPath.normalize().startsWith(Paths.get(targetDir).normalize())) {
+                    if (entry.isDirectory()) {
+                        Files.createDirectories(entryPath);
+                    } else {
+                        Files.createDirectories(entryPath.getParent());
+                        Files.copy(zis, entryPath);
+                    }
+                }
+                zis.closeEntry();
+            }
+        }
+    }
 
-        String jobId = yoloService.startPreprocess(inputDir);
-        authService.logOperation(null, username, "PREPROCESS", dataName, "预处理: python preprocess.py --input_dir " + inputDir);
+    @GetMapping("/datasets/browse")
+    public ResponseEntity<Map<String, Object>> browsePvcDirectory(
+            @RequestParam(value = "path", required = false) String subPath) {
 
-        Map<String, String> response = new HashMap<>();
-        response.put("jobId", jobId);
-        response.put("message", "预处理任务已启动");
-        return ResponseEntity.ok(response);
+        Map<String, Object> response = new HashMap<>();
+        try {
+            String workspaceDir = projectRoot.replace("\\", "/");
+            if (!workspaceDir.endsWith("/")) workspaceDir += "/";
+
+            String browsePath = workspaceDir;
+            if (subPath != null && !subPath.isBlank()) {
+                browsePath = workspaceDir + subPath;
+            }
+
+            File dir = new File(browsePath);
+            if (!dir.exists() || !dir.isDirectory()) {
+                response.put("status", "error");
+                response.put("message", "目录不存在: " + browsePath);
+                return ResponseEntity.ok(response);
+            }
+
+            List<Map<String, Object>> items = new java.util.ArrayList<>();
+            File[] files = dir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    Map<String, Object> item = new HashMap<>();
+                    item.put("name", f.getName());
+                    item.put("isDirectory", f.isDirectory());
+                    item.put("path", f.getAbsolutePath().replace("\\", "/"));
+                    if (!f.isDirectory()) {
+                        item.put("size", f.length());
+                    }
+                    items.add(item);
+                }
+            }
+
+            response.put("status", "success");
+            response.put("path", browsePath);
+            response.put("items", items);
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            response.put("status", "error");
+            response.put("message", e.getMessage());
+            return ResponseEntity.ok(response);
+        }
     }
 
     @PostMapping("/datasets")
     public ResponseEntity<Map<String, String>> addDataset(@RequestBody Map<String, Object> request, HttpServletRequest httpRequest) {
         String inputDir = (String) request.get("inputDir");
-        if (inputDir == null || !isValidDatasetFilesystemPath(inputDir)) {
+        String username = (String) httpRequest.getAttribute("username");
+
+        if (inputDir == null || inputDir.isBlank()) {
             Map<String, String> response = new HashMap<>();
-            response.put("message", "数据路径无效：请填写包含上级目录的完整路径（不可仅为文件夹名称）。浏览器拖拽若无法识别路径，请使用「浏览」或手动粘贴路径。");
+            response.put("message", "数据路径不能为空");
             return ResponseEntity.badRequest().body(response);
         }
-        String dataName = new File(inputDir).getName();
-        String username = (String) httpRequest.getAttribute("username");
+
+        inputDir = inputDir.trim();
+
+        String dataName;
+        String effectivePath;
+
+        if (inputDir.startsWith("/") || inputDir.startsWith("/app/workspace")) {
+            effectivePath = inputDir;
+            dataName = new File(inputDir).getName();
+        } else {
+            String workspaceDir = projectRoot.replace("\\", "/");
+            if (!workspaceDir.endsWith("/")) workspaceDir += "/";
+            effectivePath = workspaceDir + inputDir;
+            dataName = inputDir;
+        }
 
         if (datasetRepository.existsByName(dataName)) {
             Map<String, String> response = new HashMap<>();
@@ -133,10 +220,10 @@ public class YoloController {
             return ResponseEntity.badRequest().body(response);
         }
 
-        Dataset dataset = new Dataset(dataName, inputDir, username);
+        Dataset dataset = new Dataset(dataName, effectivePath, username);
         datasetRepository.save(dataset);
 
-        authService.logOperation(null, username, "ADD_DATASET", dataName, "添加数据集: " + inputDir);
+        authService.logOperation(null, username, "ADD_DATASET", dataName, "添加数据集: " + effectivePath);
 
         Map<String, String> response = new HashMap<>();
         response.put("message", "数据集添加成功");
@@ -152,21 +239,30 @@ public class YoloController {
         int added = 0, skipped = 0;
         java.util.List<String> addedNames = new java.util.ArrayList<>();
 
+        String workspaceDir = projectRoot.replace("\\", "/");
+        if (!workspaceDir.endsWith("/")) workspaceDir += "/";
+
         for (String inputDir : dirs) {
-            if (inputDir == null || !isValidDatasetFilesystemPath(inputDir)) {
-                Map<String, Object> bad = new HashMap<>();
-                bad.put("message", "路径无效（需完整路径，不能仅为文件夹名）: " + inputDir);
-                bad.put("status", "error");
-                return ResponseEntity.badRequest().body(bad);
+            if (inputDir == null || inputDir.isBlank()) continue;
+
+            String dataName;
+            String effectivePath;
+
+            if (inputDir.startsWith("/") || inputDir.startsWith("/app/workspace")) {
+                effectivePath = inputDir;
+                dataName = new File(inputDir).getName();
+            } else {
+                effectivePath = workspaceDir + inputDir;
+                dataName = inputDir;
             }
-            String dataName = new File(inputDir).getName();
+
             if (datasetRepository.existsByName(dataName)) {
                 skipped++;
                 continue;
             }
-            Dataset dataset = new Dataset(dataName, inputDir, username);
+            Dataset dataset = new Dataset(dataName, effectivePath, username);
             datasetRepository.save(dataset);
-            authService.logOperation(null, username, "ADD_DATASET", dataName, "添加数据集: " + inputDir);
+            authService.logOperation(null, username, "ADD_DATASET", dataName, "添加数据集: " + effectivePath);
             addedNames.add(dataName);
             added++;
         }
@@ -178,13 +274,22 @@ public class YoloController {
         return ResponseEntity.ok(response);
     }
 
-    /** 拒绝仅含文件夹名（如 data1）的路径，避免预处理找不到目录 */
-    private boolean isValidDatasetFilesystemPath(String inputDir) {
-        if (inputDir == null || inputDir.isBlank()) {
-            return false;
-        }
-        File f = new File(inputDir.trim());
-        return f.getParentFile() != null;
+    @PostMapping("/preprocess")
+    public ResponseEntity<Map<String, String>> preprocess(@RequestBody Map<String, Object> request, HttpServletRequest httpRequest) {
+        String dataName = (String) request.get("dataName");
+        String username = (String) httpRequest.getAttribute("username");
+
+        String inputDir = datasetRepository.findByName(dataName)
+                .map(Dataset::getInputPath)
+                .orElse(dataName);
+
+        String jobId = yoloService.startPreprocess(inputDir);
+        authService.logOperation(null, username, "PREPROCESS", dataName, "预处理: " + inputDir);
+
+        Map<String, String> response = new HashMap<>();
+        response.put("jobId", jobId);
+        response.put("message", "预处理任务已启动");
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/status/{jobId}")
@@ -370,54 +475,54 @@ public class YoloController {
             return ResponseEntity.ok(response);
         }
 
-        String log = "";
+        String logContent = "";
         String status = record.getTrainStatus() != null ? record.getTrainStatus() : "IDLE";
 
         if ("QUEUED".equals(status)) {
-            log = "训练任务正在排队等待中...\n记录: " + recordName + "\n参数: epochs=" + record.getEpochs() + ", imgsz=" + record.getImgsz() + "\n状态: 排队中\n等待其他任务完成后将自动开始训练...";
+            logContent = "训练任务正在排队等待中...\n记录: " + recordName + "\n参数: epochs=" + record.getEpochs() + ", imgsz=" + record.getImgsz() + "\n状态: 排队中\n等待其他任务完成后将自动开始训练...";
         } else if ("IDLE".equals(status) && record.getTrainJobId() == null) {
-            log = "训练任务尚未启动\n记录: " + recordName + "\n参数: epochs=" + record.getEpochs() + ", imgsz=" + record.getImgsz() + "\n状态: 待训练\n请点击训练按钮开始训练";
+            logContent = "训练任务尚未启动\n记录: " + recordName + "\n参数: epochs=" + record.getEpochs() + ", imgsz=" + record.getImgsz() + "\n状态: 待训练\n请点击训练按钮开始训练";
         } else if (record.getTrainJobId() != null) {
             JobStatus jobStatus = yoloService.getJobStatus(record.getTrainJobId());
             if (jobStatus != null && jobStatus.getLog() != null && !jobStatus.getLog().isEmpty()) {
-                log = jobStatus.getLog();
+                logContent = jobStatus.getLog();
                 status = jobStatus.getStatus();
             }
         }
 
-        if (log.isEmpty() && record.getTrainPodName() != null) {
+        if (logContent.isEmpty() && record.getTrainPodName() != null) {
             String podLog = yoloService.getPodLogs(record.getTrainPodName());
             if (podLog != null && !podLog.isEmpty() && !podLog.startsWith("Error:") && !podLog.contains("failed to")) {
-                log = podLog;
+                logContent = podLog;
             }
         }
 
-        if (log.isEmpty()) {
+        if (logContent.isEmpty()) {
             String jobLog = yoloService.getJobLogs(recordName + "-train-job");
             if (jobLog != null && !jobLog.isEmpty() && !jobLog.startsWith("Error:") && !jobLog.contains("failed to")) {
-                log = jobLog;
+                logContent = jobLog;
             }
         }
 
-        if (log.isEmpty() && record.getTrainLogFile() != null && !record.getTrainLogFile().isBlank()) {
+        if (logContent.isEmpty() && record.getTrainLogFile() != null && !record.getTrainLogFile().isBlank()) {
             String fileRead = yoloService.readLogContentByFileName(record.getTrainLogFile());
             if (fileRead != null && !fileRead.isEmpty()) {
-                log = fileRead;
+                logContent = fileRead;
             }
         }
 
-        if (log.isEmpty()) {
+        if (logContent.isEmpty()) {
             String fileLog = yoloService.readLogFromFile(recordName + "-train");
             if (fileLog != null && !fileLog.isEmpty()) {
-                log = fileLog;
+                logContent = fileLog;
             }
         }
 
-        if (log.isEmpty()) {
-            log = "日志不可用：训练任务已完成，相关资源已被清理。\n训练状态: " + status;
+        if (logContent.isEmpty()) {
+            logContent = "日志不可用：训练任务已完成，相关资源已被清理。\n训练状态: " + status;
         }
 
-        response.put("log", log);
+        response.put("log", logContent);
         response.put("status", status);
         response.put("progress", record.getTrainProgress() != null ? record.getTrainProgress() : 0);
         return ResponseEntity.ok(response);
@@ -433,50 +538,50 @@ public class YoloController {
             return ResponseEntity.ok(response);
         }
 
-        String log = "";
+        String logContent = "";
         String status = record.getTestStatus() != null ? record.getTestStatus() : "IDLE";
 
         if (record.getTestJobId() != null) {
             JobStatus jobStatus = yoloService.getJobStatus(record.getTestJobId());
             if (jobStatus != null && jobStatus.getLog() != null && !jobStatus.getLog().isEmpty()) {
-                log = jobStatus.getLog();
+                logContent = jobStatus.getLog();
                 status = jobStatus.getStatus();
             }
         }
 
-        if (log.isEmpty() && record.getTestPodName() != null) {
+        if (logContent.isEmpty() && record.getTestPodName() != null) {
             String podLog = yoloService.getPodLogs(record.getTestPodName());
             if (podLog != null && !podLog.isEmpty() && !podLog.startsWith("Error:") && !podLog.startsWith("获取日志中") && !podLog.contains("failed to")) {
-                log = podLog;
+                logContent = podLog;
             }
         }
 
-        if (log.isEmpty()) {
+        if (logContent.isEmpty()) {
             String jobLog = yoloService.getJobLogs(recordName + "-test-job");
             if (jobLog != null && !jobLog.isEmpty() && !jobLog.startsWith("Error:") && !jobLog.contains("failed to")) {
-                log = jobLog;
+                logContent = jobLog;
             }
         }
 
-        if (log.isEmpty() && record.getTestLogFile() != null && !record.getTestLogFile().isBlank()) {
+        if (logContent.isEmpty() && record.getTestLogFile() != null && !record.getTestLogFile().isBlank()) {
             String fileRead = yoloService.readLogContentByFileName(record.getTestLogFile());
             if (fileRead != null && !fileRead.isEmpty()) {
-                log = fileRead;
+                logContent = fileRead;
             }
         }
 
-        if (log.isEmpty()) {
+        if (logContent.isEmpty()) {
             String fileLog = yoloService.readLogFromFile(recordName + "-test");
             if (fileLog != null && !fileLog.isEmpty()) {
-                log = fileLog;
+                logContent = fileLog;
             }
         }
 
-        if (log.isEmpty()) {
-            log = "日志不可用：测试任务已完成，相关资源已被清理。\n测试状态: " + status;
+        if (logContent.isEmpty()) {
+            logContent = "日志不可用：测试任务已完成，相关资源已被清理。\n测试状态: " + status;
         }
 
-        response.put("log", log);
+        response.put("log", logContent);
         response.put("status", status);
         return ResponseEntity.ok(response);
     }

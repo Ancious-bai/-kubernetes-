@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: yolo-mysql
+  namespace: yolo-system
+spec:
+  serviceName: yolo-mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: yolo-mysql
+  template:
+    metadata:
+      labels:
+        app: yolo-mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: yolo-db-secret
+                  key: DB_PASSWORD
+            - name: MYSQL_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: yolo-db-secret
+                  key: DB_NAME
+          ports:
+            - containerPort: 3306
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          livenessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+                - -h
+                - localhost
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+                - -h
+                - localhost
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: mysql-data
+          persistentVolumeClaim:
+            claimName: yolo-mysql-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: yolo-mysql
+  namespace: yolo-system
+spec:
+  selector:
+    app: yolo-mysql
+  ports:
+    - port: 3306
+      targetPort: 3306

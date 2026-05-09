@@ -19,6 +19,7 @@
       <div class="sidebar-logo"><div class="logo-icon">Y</div><span class="logo-text">YOLO</span></div>
       <nav class="sidebar-nav">
         <div class="nav-item" :class="{active:activePage==='main'}" @click="activePage='main'"><el-icon><Monitor /></el-icon><span>训练管理</span></div>
+        <div class="nav-item" :class="{active:activePage==='nodes'}" @click="switchToNodes"><el-icon><Coin /></el-icon><span>节点管理</span></div>
         <div class="nav-item" :class="{active:activePage==='logs'}" @click="switchToLogs"><el-icon><Document /></el-icon><span>操作日志</span></div>
         <div class="nav-item" v-if="isAdmin" :class="{active:activePage==='users'}" @click="switchToUsers"><el-icon><UserFilled /></el-icon><span>用户管理</span></div>
       </nav>
@@ -36,13 +37,28 @@
           <el-card shadow="hover" class="top-card dataset-card-top">
             <template #header><span class="card-title">添加数据集</span></template>
             <div class="input-row">
-              <el-input v-model="form.inputDir" placeholder="请输入数据路径或拖拽文件夹到下方区域" @keyup.enter="handleAddDataset" size="large" clearable class="input-flex" />
-              <el-button type="info" @click="browseFolder('请选择数据集文件夹','input')">浏览</el-button>
+              <el-input v-model="form.inputDir" placeholder="输入数据集名称（如 cat-dataset）或 PVC 路径" @keyup.enter="handleAddDataset" size="large" clearable class="input-flex" />
+              <el-button type="info" @click="browsePvcFolder('input')">浏览PVC</el-button>
               <el-button type="primary" @click="handleAddDataset" :loading="currentStep==='addDataset'">添加</el-button>
             </div>
-            <div class="drop-zone" :class="{'drop-zone-active':isDragOver}" @dragover.prevent="isDragOver=true" @dragleave.prevent="isDragOver=false" @drop.prevent="handleDrop">
-              <div class="drop-zone-text"><el-icon size="28"><UploadFilled /></el-icon><span>拖拽文件夹到此处添加数据集（支持多个）</span></div>
+            <div class="input-row" style="margin-top:8px">
+              <span style="font-size:12px;color:#999;line-height:32px">或</span>
+              <el-upload :show-file-list="false" :before-upload="handleFileUpload" accept=".zip" :disabled="currentStep==='addDataset'">
+                <el-button type="success" size="large" :loading="currentStep==='addDataset'">上传ZIP数据集</el-button>
+              </el-upload>
             </div>
+            <div class="drop-zone" :class="{'drop-zone-active':isDragOver}" @dragover.prevent="isDragOver=true" @dragleave.prevent="isDragOver=false" @drop.prevent="handleDrop">
+              <div class="drop-zone-text"><el-icon size="28"><UploadFilled /></el-icon><span>拖拽 ZIP 文件到此处上传数据集</span></div>
+            </div>
+            <el-dialog title="浏览 PVC 目录" v-model="pvcBrowserVisible" width="600px">
+              <div style="margin-bottom:10px"><el-button size="small" @click="browsePvcPath('')">根目录</el-button><span style="margin-left:10px;color:#666">{{ pvcBrowserCurrentPath }}</span></div>
+              <el-table :data="pvcBrowserItems" max-height="400" @row-dblclick="row=>{if(row.isDirectory)browsePvcPath(row.name)}" highlight-current-row @current-change="selectPvcItem">
+                <el-table-column prop="name" label="名称" />
+                <el-table-column prop="isDirectory" label="类型" width="80"><template #default="{row}">{{ row.isDirectory?'文件夹':'文件' }}</template></el-table-column>
+                <el-table-column prop="size" label="大小" width="100"><template #default="{row}">{{ row.isDirectory?'-':(row.size>1048576?(row.size/1048576).toFixed(1)+'MB':(row.size/1024).toFixed(1)+'KB') }}</template></el-table-column>
+              </el-table>
+              <template #footer><el-button @click="pvcBrowserVisible=false">取消</el-button><el-button type="primary" @click="confirmPvcSelection">选择此目录</el-button></template>
+            </el-dialog>
           </el-card>
           <el-card shadow="hover" class="top-card config-card-top">
             <template #header><span class="card-title">全局配置</span></template>
@@ -58,7 +74,7 @@
           <el-card shadow="hover" v-for="ds in pagedDatasets" :key="ds.name" class="dataset-card">
             <div class="dataset-header">
               <div class="dataset-info"><span class="dataset-name">{{ ds.name }}</span><el-tag size="small" type="info">{{ ds.createdBy }}</el-tag><el-tag :type="ds.preprocessed?'success':'info'" size="small">{{ ds.preprocessed?'已预处理':'未预处理' }}</el-tag><el-button v-if="!ds.preprocessed" size="small" type="warning" :loading="processingStatus[ds.name]" @click="handlePreprocessDataset(ds.name)">预处理</el-button></div>
-              <div class="header-actions"><el-button size="small" type="primary" plain @click="addPendingRecord(ds.name)">+ 新增训练</el-button><el-button size="small" type="danger" @click="handleDeleteDataset(ds.name)">删除数据集</el-button></div>
+              <div class="header-actions"><el-button size="small" type="primary" plain @click="addPendingRecord(ds.name)">+ 新增训练</el-button><el-button size="small" type="success" plain @click="showDistributedTrain(ds.name)">分布式训练</el-button><el-button size="small" type="danger" @click="handleDeleteDataset(ds.name)">删除数据集</el-button></div>
             </div>
             <div class="dataset-records" style="overflow-x:auto">
               <table class="records-table"><thead><tr><th class="col-priority">优先级</th><th class="col-epoch">Epochs</th><th class="col-imgsz">Imgsz</th><th class="col-tstatus">训练状态</th><th class="col-estatus">测试状态</th><th class="col-action">操作</th></tr></thead>
@@ -145,15 +161,63 @@
           </el-table>
         </el-card>
       </div>
+
+      <div v-show="activePage==='nodes'" class="page-nodes">
+        <div class="page-header" style="display:flex;justify-content:space-between;align-items:center"><h2>集群节点管理</h2><div><el-button type="primary" size="small" @click="syncNodes" :loading="nodesSyncing">同步节点</el-button></div></div>
+
+        <div class="cluster-overview">
+          <el-card shadow="hover" class="overview-card"><div class="overview-value">{{ clusterOverview.totalNodes || 0 }}</div><div class="overview-label">总节点数</div></el-card>
+          <el-card shadow="hover" class="overview-card overview-ready"><div class="overview-value">{{ clusterOverview.readyNodes || 0 }}</div><div class="overview-label">就绪节点</div></el-card>
+          <el-card shadow="hover" class="overview-card overview-gpu"><div class="overview-value">{{ clusterOverview.gpuNodes || 0 }}</div><div class="overview-label">GPU节点</div></el-card>
+          <el-card shadow="hover" class="overview-card overview-master"><div class="overview-value">{{ clusterOverview.masterNodes || 0 }}</div><div class="overview-label">Master节点</div></el-card>
+          <el-card shadow="hover" class="overview-card overview-worker"><div class="overview-value">{{ clusterOverview.workerNodes || 0 }}</div><div class="overview-label">Worker节点</div></el-card>
+        </div>
+
+        <el-card shadow="hover" style="margin-top:14px">
+          <el-table :data="clusterNodes" stripe size="small" class="fixed-table" max-height="500">
+            <el-table-column prop="nodeName" label="节点名称" min-width="140" show-overflow-tooltip />
+            <el-table-column prop="nodeIp" label="IP地址" width="130" />
+            <el-table-column prop="roles" label="角色" width="100" />
+            <el-table-column label="状态" width="90" align="center"><template #default="{row}"><el-tag :type="row.ready?'success':'danger'" size="small">{{ row.ready?'就绪':'未就绪' }}</el-tag></template></el-table-column>
+            <el-table-column label="可调度" width="80" align="center"><template #default="{row}"><el-tag :type="row.schedulable?'success':'warning'" size="small">{{ row.schedulable?'是':'否' }}</el-tag></template></el-table-column>
+            <el-table-column prop="cpuAllocatable" label="CPU(可分配)" width="110" />
+            <el-table-column prop="memoryAllocatable" label="内存(可分配)" width="120" />
+            <el-table-column prop="gpuAllocatable" label="GPU(可分配)" width="110" />
+            <el-table-column prop="kubeletVersion" label="K8s版本" width="100" />
+            <el-table-column label="操作" width="160" align="center"><template #default="{row}"><el-button v-if="row.schedulable" size="small" type="warning" @click="cordonNode(row.nodeName)">停止调度</el-button><el-button v-else size="small" type="success" @click="uncordonNode(row.nodeName)">恢复调度</el-button><el-button v-if="currentUser.role==='ROOT'" size="small" type="danger" @click="deleteNodeRecord(row.nodeName)">删除</el-button></template></el-table-column>
+          </el-table>
+        </el-card>
+
+        <el-card shadow="hover" style="margin-top:14px">
+          <template #header><span class="card-title">调度配置</span></template>
+          <div class="config-row">
+            <div class="cfg-item"><span class="cfg-label">调度模式</span><el-select v-model="schedulingMode" size="small" style="width:120px" @change="handleSchedulingModeChange"><el-option label="自动调度" value="auto" /><el-option label="手动指定" value="manual" /></el-select></div>
+            <div class="cfg-item"><span class="cfg-label">同时训练</span><el-input-number v-model="maxConcurrentTasks" :min="1" :max="10" size="small" style="width:70px" /><el-button type="primary" size="small" @click="handleMaxConcurrentTasksChange(maxConcurrentTasks)">保存</el-button></div>
+          </div>
+        </el-card>
+      </div>
     </main>
 
     <el-dialog title="保存模型" v-model="saveModelDialogVisible" width="480px" :close-on-click-modal="false">
       <el-form :model="saveModelForm" label-width="80px">
         <el-form-item label="记录"><el-tag type="success">{{ saveModelForm.recordName }}</el-tag></el-form-item>
         <el-form-item label="类型"><el-radio-group v-model="saveModelForm.modelType"><el-radio label="best">最佳模型(best.pt)</el-radio><el-radio label="last">最后模型(last.pt)</el-radio></el-radio-group></el-form-item>
-        <el-form-item label="保存路径"><div class="save-path-row"><el-input v-model="saveModelForm.savePath" placeholder="默认项目saved_models目录" /><el-button type="info" @click="browseFolder('请选择模型保存路径','save')">浏览</el-button></div></el-form-item>
+        <el-form-item label="保存路径"><div class="save-path-row"><el-input v-model="saveModelForm.savePath" placeholder="默认项目saved_models目录" /><el-button type="info" @click="browsePvcFolder('save')">浏览PVC</el-button></div></el-form-item>
       </el-form>
       <template #footer><el-button type="primary" @click="confirmSaveModel" :loading="saveModelLoading">保存</el-button></template>
+    </el-dialog>
+
+    <el-dialog title="分布式训练配置" v-model="showDistributedTrainDialog" width="520px" :close-on-click-modal="false">
+      <el-form :model="distributedTrainForm" label-width="90px">
+        <el-form-item label="数据集"><el-tag>{{ distributedTrainForm.dataName }}</el-tag></el-form-item>
+        <el-form-item label="Epochs"><el-input-number v-model="distributedTrainForm.epochs" :min="1" :max="1000" /></el-form-item>
+        <el-form-item label="Imgsz"><el-input-number v-model="distributedTrainForm.imgsz" :min="32" :max="1280" :step="32" /></el-form-item>
+        <el-form-item label="优先级"><el-input-number v-model="distributedTrainForm.priority" :min="1" :max="10" /></el-form-item>
+        <el-form-item label="目标节点"><el-select v-model="distributedTrainForm.targetNode" placeholder="自动选择" clearable style="width:100%"><el-option v-for="n in schedulableNodes" :key="n.nodeName" :label="n.nodeName + (n.gpuAllocatable&&n.gpuAllocatable!=='0'?' [GPU:'+n.gpuAllocatable+']':'')" :value="n.nodeName" /></el-select></el-form-item>
+        <el-form-item label="GPU资源"><el-select v-model="distributedTrainForm.gpuType" placeholder="无GPU" clearable style="width:100%"><el-option label="NVIDIA GPU" value="nvidia.com/gpu" /></el-select></el-form-item>
+        <el-form-item v-if="distributedTrainForm.gpuType" label="GPU数量"><el-input-number v-model="distributedTrainForm.gpuCount" :min="1" :max="8" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="showDistributedTrainDialog=false">取消</el-button><el-button type="primary" @click="confirmDistributedTrain">开始训练</el-button></template>
     </el-dialog>
 
     <el-dialog title="添加用户" v-model="showAddUserDialog" width="360px"><el-form :model="newUserForm" label-width="70px"><el-form-item label="用户名"><el-input v-model="newUserForm.username" /></el-form-item><el-form-item label="密码"><el-input v-model="newUserForm.password" type="password" /></el-form-item><el-form-item v-if="currentUser.role==='ROOT'" label="角色"><el-select v-model="newUserForm.role"><el-option label="普通用户" value="USER" /><el-option label="管理员" value="ADMIN" /></el-select></el-form-item><el-form-item v-else label="角色"><el-tag type="info">普通用户</el-tag></el-form-item></el-form><template #footer><el-button @click="showAddUserDialog=false">取消</el-button><el-button type="primary" @click="handleAddUser">创建</el-button></template></el-dialog>
@@ -178,7 +242,7 @@
 <script setup>
 import { ref, reactive, onMounted, nextTick, computed, watch, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { UploadFilled, Monitor, Document, UserFilled } from '@element-plus/icons-vue'
+import { UploadFilled, Monitor, Document, UserFilled, Coin } from '@element-plus/icons-vue'
 import axios from 'axios'
 
 const isLoggedIn=ref(false)
@@ -208,6 +272,10 @@ const logActions=['ADD_DATASET','PREPROCESS','TRAIN','TEST','SAVE_MODEL','DELETE
 const logPage=ref(1),logPageSize=ref(20)
 const userSearch=ref(''),userRoleFilter=ref('')
 
+const clusterNodes=ref([]),clusterOverview=reactive({totalNodes:0,readyNodes:0,gpuNodes:0,masterNodes:0,workerNodes:0}),nodesSyncing=ref(false),schedulingMode=ref('auto')
+const showDistributedTrainDialog=ref(false),distributedTrainForm=reactive({dataName:'',epochs:2,imgsz:640,priority:5,targetNode:'',gpuType:'',gpuCount:1})
+const schedulableNodes=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable))
+
 const wsConnections=new Map()
 let statusRefreshTimer=null
 
@@ -220,7 +288,16 @@ const filteredLogs=computed(()=>{let list=[...operationLogs.value];if(logFilter.
 const pagedLogList=computed(()=>{const s=(logPage.value-1)*logPageSize.value;return filteredLogs.value.slice(s,s+logPageSize.value)})
 const filteredUserList=computed(()=>{let list=[...userList.value];if(userSearch.value){const kw=userSearch.value.toLowerCase();list=list.filter(u=>u.username.toLowerCase().includes(kw))}if(userRoleFilter.value){list=list.filter(u=>u.role===userRoleFilter.value)}return list})
 
-const looksLikeFullDatasetPath=(p)=>{if(!p||typeof p!=='string')return false;const t=p.trim();if(t.length<2)return false;if(/^[a-zA-Z]:[\\/]/.test(t))return t.length>3;if(t.startsWith('\\\\'))return t.split(/[\\/]/).filter(Boolean).length>=2;if(t.startsWith('/'))return t.split('/').filter(Boolean).length>=2;if(t.includes('\\'))return t.split(/[\\/]/).filter(Boolean).length>=2;if(t.includes('/'))return t.split('/').filter(Boolean).length>=2;return false}
+const looksLikeFullDatasetPath=(p)=>{if(!p||typeof p!=='string')return false;const t=p.trim();if(t.length<1)return false;if(t.startsWith('/'))return t.split('/').filter(Boolean).length>=1;return t.length>=1}
+
+const pvcBrowserVisible=ref(false),pvcBrowserItems=ref([]),pvcBrowserCurrentPath=ref(''),pvcBrowserTarget=ref('input'),pvcSelectedPath=ref('')
+
+const browsePvcFolder=(target)=>{pvcBrowserTarget.value=target;pvcBrowserCurrentPath.value='';pvcBrowserItems.value=[];pvcSelectedPath.value='';browsePvcPath('');pvcBrowserVisible.value=true}
+const browsePvcPath=async(subPath)=>{try{const r=await api.value.get('/api/datasets/browse',{params:{path:subPath}});if(r.data.status==='success'){pvcBrowserItems.value=r.data.items||[];pvcBrowserCurrentPath.value=r.data.path}else{showMsg(r.data.message||'浏览失败','error')}}catch(e){showMsg('浏览PVC失败','error')}}
+const selectPvcItem=(row)=>{if(row)pvcSelectedPath.value=row.path}
+const confirmPvcSelection=()=>{if(pvcBrowserTarget.value==='input')form.inputDir=pvcSelectedPath.value||pvcBrowserCurrentPath.value;else if(pvcBrowserTarget.value==='save')saveModelForm.savePath=pvcSelectedPath.value||pvcBrowserCurrentPath.value;pvcBrowserVisible.value=false}
+
+const handleFileUpload=async(file)=>{const dataName=file.name.replace(/\.zip$/i,'');currentStep.value='addDataset';try{const formData=new FormData();formData.append('file',file);formData.append('dataName',dataName);const r=await api.value.post('/api/datasets/upload',formData,{headers:{'Content-Type':'multipart/form-data'},timeout:300000});showMsg(`数据集 ${dataName} 上传成功`);await refreshDatasets();await loadTrainingRecords()}catch(e){showMsg(`上传失败: ${e.response?.data?.message||e.message}`,'error')}finally{currentStep.value='';return false}}
 const canEditUserRole=(row)=>{if(!row||row.role==='ROOT')return false;if(currentUser.username===row.username)return false;if(currentUser.role==='ROOT')return true;if(currentUser.role==='ADMIN'&&row.role==='USER')return true;return false}
 const getDatasetRecords=(dataName)=>trainingRecords.value.filter(r=>r.dataName===dataName)
 const getPendingRecords=(dataName)=>pendingRecords.value[dataName]||[]
@@ -232,12 +309,24 @@ const removePendingRecord=(dataName,key)=>{if(pendingRecords.value[dataName])pen
 
 const switchToLogs=()=>{activePage.value='logs';loadOperationLogs()}
 const switchToUsers=()=>{activePage.value='users';loadUsers()}
+const switchToNodes=()=>{activePage.value='nodes';loadClusterNodes();loadClusterOverview()}
+
+const loadClusterNodes=async()=>{try{const r=await api.value.get('/api/nodes');clusterNodes.value=r.data}catch(e){}}
+const loadClusterOverview=async()=>{try{const r=await api.value.get('/api/nodes/overview');Object.assign(clusterOverview,r.data)}catch(e){}}
+const syncNodes=async()=>{nodesSyncing.value=true;try{await api.value.post('/api/nodes/sync');await loadClusterNodes();await loadClusterOverview();showMsg('节点同步完成')}catch(e){showMsg('同步失败','error')}finally{nodesSyncing.value=false}}
+const cordonNode=async(name)=>{try{await api.value.post(`/api/nodes/${name}/cordon`);showMsg(`节点 ${name} 已停止调度`);await loadClusterNodes()}catch(e){showMsg('操作失败','error')}}
+const uncordonNode=async(name)=>{try{await api.value.post(`/api/nodes/${name}/uncordon`);showMsg(`节点 ${name} 已恢复调度`);await loadClusterNodes()}catch(e){showMsg('操作失败','error')}}
+const deleteNodeRecord=async(name)=>{try{await api.value.delete(`/api/nodes/${name}`);showMsg('节点记录已删除');await loadClusterNodes();await loadClusterOverview()}catch(e){showMsg('删除失败','error')}}
+const handleSchedulingModeChange=async(v)=>{try{await api.value.post('/api/scheduler/scheduling-mode',{mode:v});showMsg(`调度模式已设为 ${v==='auto'?'自动':'手动'}`)}catch(e){showMsg('更新失败','error')}}
+
+const showDistributedTrain=(dataName)=>{distributedTrainForm.dataName=dataName;distributedTrainForm.epochs=savedDefaultEpochs.value;distributedTrainForm.imgsz=savedDefaultImgsz.value;distributedTrainForm.priority=5;distributedTrainForm.targetNode='';distributedTrainForm.gpuType='';distributedTrainForm.gpuCount=1;showDistributedTrainDialog.value=true}
+const confirmDistributedTrain=async()=>{const req={dataName:distributedTrainForm.dataName,epochs:distributedTrainForm.epochs,imgsz:distributedTrainForm.imgsz,priority:distributedTrainForm.priority};if(distributedTrainForm.targetNode)req.targetNode=distributedTrainForm.targetNode;if(distributedTrainForm.gpuType&&distributedTrainForm.gpuCount>0){req.gpuResources={};req.gpuResources[distributedTrainForm.gpuType]=String(distributedTrainForm.gpuCount)}try{const r=await api.value.post('/api/scheduler/add',req);showMsg(r.data.message);showDistributedTrainDialog.value=false;await loadTrainingRecords();const rn=`${distributedTrainForm.dataName}-e${distributedTrainForm.epochs}-i${distributedTrainForm.imgsz}`;trainLogs.value[rn]='';connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){showMsg(e.response?.data?.message||'提交失败','error')}}
 
 const handleLogin=async()=>{if(loginLoading.value)return;loginLoading.value=true;loginError.value='';try{const r=await axios.post('/api/auth/login',loginForm);token.value=r.data.token;currentUser.username=r.data.username;currentUser.role=r.data.role;isLoggedIn.value=true;localStorage.setItem('token',token.value);localStorage.setItem('username',currentUser.username);localStorage.setItem('role',currentUser.role);onLoginSuccess()}catch(e){loginError.value=e.response?.data?.message||'登录失败'}finally{loginLoading.value=false}}
 
 const handleLogout=()=>{token.value='';currentUser.username='';currentUser.role='';isLoggedIn.value=false;localStorage.removeItem('token');localStorage.removeItem('username');localStorage.removeItem('role');stopAllWs();stopStatusRefresh();stopAllPreprocessTimers();datasetList.value=[];trainingRecords.value=[];userList.value=[];operationLogs.value=[];Object.keys(pendingRecords.value).forEach(k=>delete pendingRecords.value[k]);Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k]);Object.keys(processingStatus.value).forEach(k=>delete processingStatus.value[k]);Object.keys(testLoadingStatus.value).forEach(k=>delete testLoadingStatus.value[k]);currentPage.value=1;total.value=0;activePage.value='main'}
 
-const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){maxConcurrentTasks.value=r.data.maxConcurrentTasks;savedMaxConcurrentTasks.value=r.data.maxConcurrentTasks;defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz}startStatusRefresh()}catch(e){}}
+const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){maxConcurrentTasks.value=r.data.maxConcurrentTasks;savedMaxConcurrentTasks.value=r.data.maxConcurrentTasks;defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz;if(r.data.schedulingMode)schedulingMode.value=r.data.schedulingMode}startStatusRefresh()}catch(e){}}
 
 const loadTrainingRecords=async()=>{try{const oldRecords=[...trainingRecords.value];trainingRecords.value=(await api.value.get('/api/training-records')).data;checkStatusChanges(oldRecords,trainingRecords.value)}catch(e){}}
 const loadUsers=async()=>{try{const params={};if(userSearch.value)params.search=userSearch.value;if(userRoleFilter.value)params.role=userRoleFilter.value;userList.value=(await api.value.get('/api/users',{params})).data}catch(e){}}
@@ -250,11 +339,11 @@ const fetchFilteredUsers=async()=>{await loadUsers()}
 
 const getActionTagType=(action)=>{const map={ADD_DATASET:'success',PREPROCESS:'warning',TRAIN:'primary',TEST:'primary',SAVE_MODEL:'success',DELETE_DATASET:'danger',DELETE_RECORD:'danger',CONFIG_CHANGE:'info',CREATE_USER:'success',UPDATE_ROLE:'warning',DELETE_USER:'danger',CHANGE_PASSWORD:'warning'};return map[action]||'info'}
 
-const handleAddDataset=async()=>{if(!form.inputDir){showMsg('请输入数据路径','warning');return}const id=form.inputDir.trim().replace(/^["']|["']$/g,'');if(!looksLikeFullDatasetPath(id)){showMsg('路径无效：请填写完整路径','warning');return}const dn=id.split(/[/\\]/).pop();currentStep.value='addDataset';try{await api.value.post('/api/datasets',{inputDir:id});await refreshDatasets();await loadTrainingRecords();showMsg(`数据集 ${dn} 添加成功`)}catch(e){showMsg(`失败: ${e.response?.data?.message||e.message}`,'error')}finally{currentStep.value='';form.inputDir=''}}
+const handleAddDataset=async()=>{if(!form.inputDir){showMsg('请输入数据集名称或路径','warning');return}const id=form.inputDir.trim().replace(/^["']|["']$/g,'');if(!id){showMsg('输入不能为空','warning');return}currentStep.value='addDataset';try{await api.value.post('/api/datasets',{inputDir:id});await refreshDatasets();await loadTrainingRecords();showMsg(`数据集添加成功`)}catch(e){showMsg(`失败: ${e.response?.data?.message||e.message}`,'error')}finally{currentStep.value='';form.inputDir=''}}
 
-const handleDrop=async(e)=>{isDragOver.value=false;const files=e.dataTransfer.files;if(!files||files.length===0)return;const dirs=[];for(let i=0;i<files.length;i++){const f=files[i];const fp=f.path||f.name;if(fp&&!dirs.includes(fp))dirs.push(fp)}const ok=dirs.filter(looksLikeFullDatasetPath);const bad=dirs.filter(d=>!looksLikeFullDatasetPath(d));if(ok.length===0){showMsg(bad.length?'无法识别完整路径，请使用浏览或手动粘贴':'请拖拽文件夹','warning');return}if(bad.length)showMsg(`已跳过 ${bad.length} 个无效路径`,'warning');currentStep.value='addDataset';try{const r=await api.value.post('/api/datasets/batch',{dirs:ok});const d=r.data;await refreshDatasets();await loadTrainingRecords();showMsg(`成功添加 ${d.added} 个数据集${d.skipped>0?'，跳过 '+d.skipped+' 个已存在':''}`)}catch(e){showMsg(`批量添加失败: ${e.response?.data?.message||e.message}`,'error')}finally{currentStep.value=''}}
+const handleDrop=async(e)=>{isDragOver.value=false;const files=e.dataTransfer.files;if(!files||files.length===0)return;for(let i=0;i<files.length;i++){const f=files[i];if(f.name.endsWith('.zip')){await handleFileUpload(f)}else{showMsg('请上传 ZIP 格式文件','warning')}}}
 
-const browseFolder=async(title,target)=>{try{const r=await axios.get('/api/dialog/folder',{params:{title},headers:{Authorization:`Bearer ${token.value}`}});if(r.data.status==='success'&&r.data.path){if(target==='input')form.inputDir=r.data.path;else if(target==='save')saveModelForm.savePath=r.data.path}}catch(e){showMsg('打开文件夹失败','error')}}
+const browseFolder=async(title,target)=>{browsePvcFolder(target)}
 
 const handlePreprocessDataset=async(dataName)=>{processingStatus.value[dataName]=true;preprocessLogs.value[dataName]=`正在预处理 ${dataName}...\n`;try{const r=await api.value.post('/api/preprocess',{dataName});showMsg('预处理任务已启动');pollPreprocess(r.data.jobId,dataName)}catch(e){preprocessLogs.value[dataName]+=`错误: ${e.message}\n`;showMsg('预处理失败','error');processingStatus.value[dataName]=false}}
 
@@ -388,6 +477,15 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 
 .save-path-row{display:flex;gap:8px;width:100%}.save-path-row .el-input{flex:1}
 .fixed-table{width:100%}
+
+.cluster-overview{display:flex;gap:12px;flex-wrap:wrap}
+.overview-card{flex:1;min-width:120px;text-align:center;padding:8px 0}
+.overview-value{font-size:28px;font-weight:800;color:#303133}
+.overview-label{font-size:12px;color:#909399;margin-top:4px}
+.overview-ready .overview-value{color:#67c23a}
+.overview-gpu .overview-value{color:#e6a23c}
+.overview-master .overview-value{color:#409eff}
+.overview-worker .overview-value{color:#909399}
 
 :deep(.el-card){border-radius:12px;border:none}:deep(.el-card__header){padding:12px 18px;border-bottom:1px solid #ebeef5}:deep(.el-card__body){padding:14px 18px}
 :deep(.el-table){font-size:13px}:deep(.el-table th.el-table__cell){background-color:#f5f7fa!important;text-align:center!important}:deep(.el-dialog){border-radius:12px}

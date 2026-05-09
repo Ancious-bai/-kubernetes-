@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yolo-backend
+  namespace: yolo-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: yolo-backend
+  template:
+    metadata:
+      labels:
+        app: yolo-backend
+    spec:
+      serviceAccountName: yolo-scheduler
+      containers:
+        - name: backend
+          image: <REGISTRY>/yolo-backend:v1.0.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: yolo-db-secret
+            - configMapRef:
+                name: yolo-backend-config
+          volumeMounts:
+            - name: workspace
+              mountPath: /app/workspace
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "1Gi"
+          livenessProbe:
+            httpGet:
+              path: /api/auth/health
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /api/auth/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: yolo-workspace
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: yolo-backend
+  namespace: yolo-system
+spec:
+  selector:
+    app: yolo-backend
+  ports:
+    - port: 8080
+      targetPort: 8080

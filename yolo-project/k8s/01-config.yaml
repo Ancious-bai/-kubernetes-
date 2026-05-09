@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: yolo-db-secret
+  namespace: yolo-system
+type: Opaque
+stringData:
+  DB_HOST: "yolo-mysql"
+  DB_PORT: "3306"
+  DB_NAME: "k8s_yolo_db"
+  DB_USER: "root"
+  DB_PASSWORD: "123123"
+  JWT_SECRET: "mySecretKeyForJwtTokenGenerationWhichShouldBeLongEnoughForHS256Algorithm2024"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yolo-backend-config
+  namespace: yolo-system
+data:
+  PROJECT_ROOT: "/app/workspace"
+  TRAINING_IMAGE: "<REGISTRY>/yolov8-trainer:v1.0.0"
+  PVC_NAME: "yolo-workspace"
+  MOUNT_PATH: "/app/workspace"
+  USE_PVC: "true"
+  K8S_NAMESPACE: "yolo-system"
+  SPRING_PROFILES_ACTIVE: "prod"

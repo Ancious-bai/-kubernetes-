@@ -28,13 +28,22 @@ public class SchedulerController {
         Integer imgsz = request.get("imgsz") != null ? ((Number) request.get("imgsz")).intValue() : null;
         Integer priority = request.get("priority") != null ? ((Number) request.get("priority")).intValue() : null;
         String username = (String) httpRequest.getAttribute("username");
+
+        String targetNode = (String) request.get("targetNode");
+        Map<String, String> nodeSelector = (Map<String, String>) request.get("nodeSelector");
+        Map<String, String> gpuResources = (Map<String, String>) request.get("gpuResources");
+
         Map<String, String> response = new HashMap<>();
 
         try {
-            schedulerService.addTask(dataName, epochs, imgsz, username, priority);
+            schedulerService.addTask(dataName, epochs, imgsz, username, priority,
+                    targetNode, nodeSelector, gpuResources);
             int e = epochs != null && epochs > 0 ? epochs : 2;
             int i = imgsz != null && imgsz > 0 ? imgsz : 640;
-            authService.logOperation(null, username, "TRAIN", dataName + "-e" + e + "-i" + i, "开始训练: epochs=" + e + ", imgsz=" + i);
+            String detail = "开始训练: epochs=" + e + ", imgsz=" + i;
+            if (targetNode != null) detail += ", node=" + targetNode;
+            if (gpuResources != null) detail += ", gpu=" + gpuResources;
+            authService.logOperation(null, username, "TRAIN", dataName + "-e" + e + "-i" + i, detail);
             response.put("message", "任务已加入队列");
             response.put("status", "success");
             return ResponseEntity.ok(response);
@@ -158,13 +167,35 @@ public class SchedulerController {
         return ResponseEntity.ok(response);
     }
 
+    @PostMapping("/scheduling-mode")
+    public ResponseEntity<Map<String, String>> setSchedulingMode(@RequestBody Map<String, Object> request, HttpServletRequest httpRequest) {
+        String mode = (String) request.get("mode");
+        String username = (String) httpRequest.getAttribute("username");
+        Map<String, String> response = new HashMap<>();
+
+        try {
+            schedulerService.setSchedulingMode(mode);
+            authService.logOperation(null, username, "CONFIG_CHANGE", "schedulingMode", "调度模式更新为: " + mode);
+            response.put("message", "调度模式已更新为: " + mode);
+            response.put("status", "success");
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            response.put("message", e.getMessage());
+            response.put("status", "error");
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
+
+    @GetMapping("/scheduling-mode")
+    public ResponseEntity<Map<String, Object>> getSchedulingMode() {
+        Map<String, Object> response = new HashMap<>();
+        response.put("mode", schedulerService.getSchedulingMode());
+        return ResponseEntity.ok(response);
+    }
+
     @GetMapping("/config")
     public ResponseEntity<Map<String, Object>> getConfig() {
-        Map<String, Object> response = new HashMap<>();
-        response.put("maxConcurrentTasks", schedulerService.getMaxConcurrentTasks());
-        response.put("defaultEpochs", schedulerService.getDefaultEpochs());
-        response.put("defaultImgsz", schedulerService.getDefaultImgsz());
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(schedulerService.getConfig());
     }
 
     @GetMapping("/queue")

@@ -1,0 +1,8 @@
+node_modules
+.git
+.idea
+target
+*.log
+hs_err_pid*.log
+replay_pid*.log
+RUNNING.md

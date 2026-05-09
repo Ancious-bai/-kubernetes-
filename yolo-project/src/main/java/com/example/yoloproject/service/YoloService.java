@@ -6,7 +6,11 @@ import com.example.yoloproject.entity.Dataset;
 import com.example.yoloproject.entity.TrainingRecord;
 import com.example.yoloproject.repository.DatasetRepository;
 import com.example.yoloproject.repository.TrainingRecordRepository;
+import io.kubernetes.client.openapi.models.V1Job;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -14,30 +18,35 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.*;
 import java.util.concurrent.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class YoloService {
 
+    private static final Logger log = LoggerFactory.getLogger(YoloService.class);
+
     private final Map<String, JobStatus> jobStatusMap = new ConcurrentHashMap<>();
     private final ExecutorService executorService = Executors.newCachedThreadPool();
-    private static final String PROJECT_ROOT;
-    private static final String PREPROCESS_SCRIPT;
-    private static final String GENERATE_YAML_SCRIPT;
-    public static final String LOGS_DIR;
 
-    static {
-        String path = System.getProperty("user.dir").replace("/", "\\");
-        PROJECT_ROOT = new java.io.File(path).getParentFile().getAbsolutePath().replace("/", "\\");
-        PREPROCESS_SCRIPT = PROJECT_ROOT + "\\preprocess.py";
-        GENERATE_YAML_SCRIPT = PROJECT_ROOT + "\\generate_k8s_job_yaml.py";
-        LOGS_DIR = PROJECT_ROOT + "\\logs";
-    }
+    @Value("${app.project-root:./}")
+    private String projectRootConfig;
+
+    @Value("${app.training-image:yolov8-project:latest}")
+    private String trainingImage;
+
+    @Value("${app.pvc-name:yolo-workspace}")
+    private String pvcName;
+
+    @Value("${app.mount-path:/app}")
+    private String mountPath;
+
+    @Value("${app.use-pvc:false}")
+    private boolean usePvc;
 
     @Autowired
     private DatasetRepository datasetRepository;
@@ -52,6 +61,28 @@ public class YoloService {
     @Lazy
     private TrainingSchedulerService trainingSchedulerService;
 
+    @Autowired
+    private K8sClientService k8sClientService;
+
+    private String PROJECT_ROOT;
+    public String LOGS_DIR;
+
+    @jakarta.annotation.PostConstruct
+    public void init() {
+        if (projectRootConfig != null && !projectRootConfig.isEmpty() && !"./".equals(projectRootConfig)) {
+            PROJECT_ROOT = projectRootConfig;
+        } else {
+            PROJECT_ROOT = System.getProperty("user.dir");
+        }
+        PROJECT_ROOT = PROJECT_ROOT.replace("\\", "/");
+        if (!PROJECT_ROOT.endsWith("/")) {
+            PROJECT_ROOT += "/";
+        }
+        LOGS_DIR = PROJECT_ROOT + "logs";
+        log.info("YoloService initialized, PROJECT_ROOT={}, trainingImage={}, pvcName={}, usePvc={}",
+                PROJECT_ROOT, trainingImage, pvcName, usePvc);
+    }
+
     public String getProjectRoot() {
         return PROJECT_ROOT;
     }
@@ -61,18 +92,99 @@ public class YoloService {
         JobStatus status = new JobStatus(jobId, "RUNNING", 0, "");
         jobStatusMap.put(jobId, status);
 
+        if (usePvc && k8sClientService.isReady()) {
+            startPreprocessAsK8sJob(jobId, inputDir);
+        } else {
+            startPreprocessLocal(jobId, inputDir);
+        }
+
+        return jobId;
+    }
+
+    private void startPreprocessAsK8sJob(String jobId, String inputDir) {
+        executorService.submit(() -> {
+            String podName = null;
+            try {
+                String dataName = new File(inputDir).getName();
+                String preprocessJobName = dataName + "-preprocess-job";
+
+                k8sClientService.deleteJob(preprocessJobName);
+                Thread.sleep(1000);
+
+                V1Job job = k8sClientService.buildPreprocessJob(
+                        preprocessJobName, dataName, inputDir,
+                        trainingImage, pvcName, mountPath
+                );
+                k8sClientService.createJob(job);
+                log.info("Preprocess job created: {}", preprocessJobName);
+
+                for (int i = 0; i < 30; i++) {
+                    Thread.sleep(1000);
+                    podName = k8sClientService.getFirstPodNameByJob(preprocessJobName);
+                    if (podName != null) break;
+                }
+
+                if (podName != null) {
+                    String finalPodName = podName;
+                    while (true) {
+                        try {
+                            Thread.sleep(2000);
+                            String tailLog = k8sClientService.getPodLogs(finalPodName, 20);
+                            if (tailLog != null && !tailLog.isEmpty()) {
+                                updateStatus(jobId, "RUNNING", 50, tailLog);
+                            }
+
+                            String phase = k8sClientService.getPodPhase(finalPodName);
+                            if ("Succeeded".equals(phase) || "Failed".equals(phase) || "NOT_FOUND".equals(phase)) {
+                                break;
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                    }
+
+                    String fullLog = k8sClientService.getPodLogs(finalPodName);
+                    String finalLog = fullLog != null ? fullLog : "";
+                    String actualPhase = k8sClientService.getPodPhase(finalPodName);
+
+                    if ("Succeeded".equals(actualPhase)) {
+                        updateStatus(jobId, "COMPLETED", 100, finalLog + "\nPreprocess completed successfully\n");
+                        datasetRepository.findByName(dataName).ifPresent(d -> {
+                            d.setPreprocessed(true);
+                            datasetRepository.save(d);
+                        });
+                    } else {
+                        updateStatus(jobId, "FAILED", 0, finalLog + "\nPreprocess failed\n");
+                        deleteDataset(dataName);
+                    }
+                } else {
+                    updateStatus(jobId, "FAILED", 0, "Failed to find pod for preprocess job");
+                    String dataName = new File(inputDir).getName();
+                    deleteDataset(dataName);
+                }
+            } catch (Exception e) {
+                log.error("Preprocess K8s job exception: {}", e.getMessage(), e);
+                updateStatus(jobId, "FAILED", 0, "Error: " + e.getMessage());
+                String dataName = new File(inputDir).getName();
+                deleteDataset(dataName);
+            }
+        });
+    }
+
+    private void startPreprocessLocal(String jobId, String inputDir) {
         executorService.submit(() -> {
             try {
-                ProcessBuilder pb = new ProcessBuilder("python", PREPROCESS_SCRIPT, "--input_dir", inputDir);
+                ProcessBuilder pb = new ProcessBuilder("python3", "preprocess.py", "--input_dir", inputDir);
                 pb.directory(new File(PROJECT_ROOT));
                 pb.redirectErrorStream(true);
 
                 Process process = pb.start();
-                BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), "UTF-8"));
+                BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
                 StringBuilder logBuilder = new StringBuilder();
                 String line;
 
-                logBuilder.append("Running: python preprocess.py --input_dir ").append(inputDir).append("\n");
+                logBuilder.append("Running: python3 preprocess.py --input_dir ").append(inputDir).append("\n");
                 logBuilder.append("----------------------------------------------------\n");
 
                 while ((line = reader.readLine()) != null) {
@@ -101,7 +213,7 @@ public class YoloService {
                 }
             } catch (Exception e) {
                 StringBuilder logBuilder = new StringBuilder();
-                logBuilder.append("Error: " + e.getMessage() + "\n");
+                logBuilder.append("Error: ").append(e.getMessage()).append("\n");
                 logBuilder.append("Auto-deleting dataset...\n");
                 updateStatus(jobId, "FAILED", 0, logBuilder.toString());
 
@@ -109,12 +221,11 @@ public class YoloService {
                 deleteDataset(dataName);
             }
         });
-
-        return jobId;
     }
 
     public String startTraining(String dataName, int epochs, int imgsz, String explicitRecordName) {
-        String recordName = (explicitRecordName != null && !explicitRecordName.isEmpty()) ? explicitRecordName : dataName + "-e" + epochs + "-i" + imgsz;
+        String recordName = (explicitRecordName != null && !explicitRecordName.isEmpty())
+                ? explicitRecordName : dataName + "-e" + epochs + "-i" + imgsz;
         String jobId = UUID.randomUUID().toString();
         JobStatus status = new JobStatus(jobId, "RUNNING", 0, "");
         jobStatusMap.put(jobId, status);
@@ -131,148 +242,105 @@ public class YoloService {
         executorService.submit(() -> {
             String podName = null;
             try {
-                String yamlPath = PROJECT_ROOT + "\\k8s_jobs\\" + recordName + "-train.yaml";
+                String trainJobName = recordName + "-train-job";
+                k8sClientService.deleteJob(trainJobName);
+                Thread.sleep(1000);
 
-                deleteK8sJob(recordName + "-train-job");
+                String effectivePvc = usePvc ? pvcName : null;
+                V1Job job = k8sClientService.buildTrainingJob(
+                        trainJobName, dataName, recordName,
+                        epochs, imgsz, trainingImage,
+                        effectivePvc, mountPath,
+                        null, null, null
+                );
+                k8sClientService.createJob(job);
+                log.info("Training job created: {}", trainJobName);
 
-                regenerateTrainYaml(dataName, epochs, imgsz, recordName);
-
-                File yamlFile = new File(yamlPath);
-                StringBuilder logBuilder = new StringBuilder();
-
-                if (!yamlFile.exists()) {
-                    logBuilder.append("错误: YAML文件不存在: ").append(yamlPath).append("\n");
-                    logBuilder.append("请先执行预处理操作生成配置文件\n");
-                    updateStatus(jobId, "FAILED", 0, logBuilder.toString());
-                    setTrainFinalStatus(recordName, "FAILED", null);
-                    return;
+                for (int i = 0; i < 30; i++) {
+                    Thread.sleep(1000);
+                    podName = k8sClientService.getFirstPodNameByJob(trainJobName);
+                    if (podName != null) {
+                        final String finalPodName = podName;
+                        trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
+                            r.setTrainPodName(finalPodName);
+                            trainingRecordRepository.save(r);
+                        });
+                        break;
+                    }
                 }
 
-                ProcessBuilder pb = new ProcessBuilder("kubectl", "apply", "-f", yamlPath);
-                pb.directory(new File(PROJECT_ROOT));
-                pb.redirectErrorStream(true);
+                if (podName != null) {
+                    final String finalPodName = podName;
+                    int progress = 0;
 
-                Process process = pb.start();
-                BufferedReader processReader = new BufferedReader(new InputStreamReader(process.getInputStream(), "UTF-8"));
-                String processLine;
-                StringBuilder processOutput = new StringBuilder();
-                while ((processLine = processReader.readLine()) != null) {
-                    processOutput.append(processLine).append("\n");
-                }
-                int exitCode = process.waitFor();
-
-                if (exitCode == 0) {
-                    for (int i = 0; i < 20; i++) {
+                    while (true) {
                         try {
-                            Thread.sleep(500);
-                            Process podProcess = new ProcessBuilder("kubectl", "get", "pods", "-l", "job-name=" + recordName + "-train-job", "-o", "name").start();
-                            BufferedReader podReader = new BufferedReader(new InputStreamReader(podProcess.getInputStream(), "UTF-8"));
-                            String podLine = podReader.readLine();
-                            if (podLine != null && podLine.startsWith("pod/")) {
-                                podName = podLine.substring(4);
-                                final String finalPodName = podName;
+                            Thread.sleep(2000);
+
+                            String tailLog = k8sClientService.getPodLogs(finalPodName, 10);
+                            int parsedProgress = parseEpochProgress(tailLog);
+                            if (parsedProgress > 0) {
+                                progress = parsedProgress;
+                                final int currentProgress = progress;
                                 trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-                                    r.setTrainPodName(finalPodName);
+                                    r.setTrainProgress(currentProgress);
                                     trainingRecordRepository.save(r);
                                 });
+                            }
+
+                            updateStatus(jobId, "RUNNING", progress, "", finalPodName);
+
+                            String phase = k8sClientService.getPodPhase(finalPodName);
+                            if ("Succeeded".equals(phase) || "Failed".equals(phase) || "NOT_FOUND".equals(phase)) {
                                 break;
                             }
-                        } catch (Exception e) {
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            break;
                         }
                     }
 
-                    if (podName != null) {
-                        final String finalPodName = podName;
-                        int progress = 0;
+                    String fullLog = k8sClientService.getPodLogs(finalPodName);
+                    if (fullLog == null || fullLog.isEmpty() || fullLog.startsWith("Error")) {
+                        fullLog = k8sClientService.getPodLogs(finalPodName);
+                    }
 
-                        while (true) {
-                            try {
-                                Thread.sleep(2000);
+                    String finalLog = fullLog != null ? fullLog : "";
+                    String finalLogLower = finalLog.toLowerCase();
 
-                                Process logProcess = new ProcessBuilder("kubectl", "logs", finalPodName, "--tail=10").start();
-                                BufferedReader logReader = new BufferedReader(new InputStreamReader(logProcess.getInputStream(), "UTF-8"));
-                                StringBuilder tailLog = new StringBuilder();
-                                String line;
-                                while ((line = logReader.readLine()) != null) {
-                                    tailLog.append(line).append("\n");
-                                }
-                                logProcess.waitFor();
-
-                                int parsedProgress = parseEpochProgress(tailLog.toString());
-                                if (parsedProgress > 0) {
-                                    progress = parsedProgress;
-                                    final int currentProgress = progress;
-                                    trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-                                        r.setTrainProgress(currentProgress);
-                                        trainingRecordRepository.save(r);
-                                    });
-                                }
-
-                                updateStatus(jobId, "RUNNING", progress, "", finalPodName);
-
-                                Process checkProcess = new ProcessBuilder("kubectl", "get", "pod", finalPodName, "-o", "jsonpath={.status.phase}").start();
-                                BufferedReader checkReader = new BufferedReader(new InputStreamReader(checkProcess.getInputStream(), "UTF-8"));
-                                String phase = checkReader.readLine();
-                                checkProcess.waitFor();
-
-                                if ("Succeeded".equals(phase) || "Failed".equals(phase)) {
-                                    break;
-                                }
-                            } catch (Exception e) {
-                            }
-                        }
-
-                        String fullLog = getPodLogs(finalPodName);
-                        if (fullLog == null || fullLog.isEmpty() || fullLog.startsWith("Error:") || fullLog.startsWith("获取日志中")) {
-                            fullLog = getJobLogs(recordName + "-train-job");
-                        }
-
-                        String finalLog = fullLog != null ? fullLog : "";
-                        String finalLogLower = finalLog.toLowerCase();
-
-                        boolean hasFatalError = finalLogLower.contains("fatal error") && !finalLogLower.contains("keyboardinterrupt");
-                        boolean hasSuccessIndicators = finalLogLower.contains("results saved") ||
+                    boolean hasFatalError = finalLogLower.contains("fatal error") && !finalLogLower.contains("keyboardinterrupt");
+                    boolean hasSuccessIndicators = finalLogLower.contains("results saved") ||
                             finalLogLower.contains("speed:") ||
                             finalLogLower.contains("map50") ||
                             finalLogLower.contains("optimizer stripped") ||
                             finalLogLower.contains("training completed") ||
                             finalLogLower.contains("validating");
 
-                        boolean trainSuccess = hasSuccessIndicators && !hasFatalError;
+                    boolean trainSuccess = hasSuccessIndicators && !hasFatalError;
 
-                        if (trainSuccess) {
-                            String finalLogStr = finalLog + "\nTraining completed successfully\n";
-                            updateStatus(jobId, "COMPLETED", 100, finalLogStr, finalPodName);
-                            persistTrainLog(recordName, finalLogStr);
-                            setTrainFinalStatus(recordName, "COMPLETED", finalPodName, 100);
-                        } else {
-                            String actualPhase = checkPodActualPhase(finalPodName);
-                            if ("Succeeded".equals(actualPhase)) {
-                                String finalLogStr = finalLog + "\nTraining completed (Pod Succeeded)\n";
-                                updateStatus(jobId, "COMPLETED", 100, finalLogStr, finalPodName);
-                                persistTrainLog(recordName, finalLogStr);
-                                setTrainFinalStatus(recordName, "COMPLETED", finalPodName, 100);
-                            } else {
-                                String finalLogStr = finalLog + "\nTraining failed\n";
-                                updateStatus(jobId, "FAILED", 0, finalLogStr, finalPodName);
-                                persistTrainLog(recordName, finalLogStr);
-                                setTrainFinalStatus(recordName, "FAILED", finalPodName);
-                            }
-                        }
+                    String actualPhase = k8sClientService.getPodPhase(finalPodName);
+
+                    if (trainSuccess || "Succeeded".equals(actualPhase)) {
+                        String finalLogStr = finalLog + "\nTraining completed successfully\n";
+                        updateStatus(jobId, "COMPLETED", 100, finalLogStr, finalPodName);
+                        persistTrainLog(recordName, finalLogStr);
+                        setTrainFinalStatus(recordName, "COMPLETED", finalPodName, 100);
                     } else {
-                        logBuilder.append("Failed to find pod\n");
-                        updateStatus(jobId, "FAILED", 0, logBuilder.toString());
-                        setTrainFinalStatus(recordName, "FAILED", null);
+                        String finalLogStr = finalLog + "\nTraining failed\n";
+                        updateStatus(jobId, "FAILED", 0, finalLogStr, finalPodName);
+                        persistTrainLog(recordName, finalLogStr);
+                        setTrainFinalStatus(recordName, "FAILED", finalPodName);
                     }
                 } else {
-                    logBuilder.append("Training job submission failed: ").append(processOutput).append("\n");
-                    updateStatus(jobId, "FAILED", 0, logBuilder.toString());
+                    String msg = "Failed to find pod for job: " + trainJobName;
+                    updateStatus(jobId, "FAILED", 0, msg);
                     setTrainFinalStatus(recordName, "FAILED", null);
                 }
             } catch (Exception e) {
-                String actualPhase = (podName != null) ? checkPodActualPhase(podName) : null;
+                log.error("Training exception for {}: {}", recordName, e.getMessage(), e);
+                String actualPhase = (podName != null) ? k8sClientService.getPodPhase(podName) : null;
                 if ("Succeeded".equals(actualPhase)) {
-                    String fullLog = getPodLogs(podName);
+                    String fullLog = k8sClientService.getPodLogs(podName);
                     String finalLogStr = (fullLog != null ? fullLog : "") + "\nTraining completed despite exception (Pod Succeeded)\n";
                     updateStatus(jobId, "COMPLETED", 100, finalLogStr, podName);
                     persistTrainLog(recordName, finalLogStr);
@@ -301,134 +369,91 @@ public class YoloService {
         executorService.submit(() -> {
             String podName = null;
             try {
-                String yamlPath = PROJECT_ROOT + "\\k8s_jobs\\" + recordName + "-test.yaml";
+                String testJobName = recordName + "-test-job";
+                k8sClientService.deleteJob(testJobName);
+                Thread.sleep(1000);
 
-                deleteK8sJob(recordName + "-test-job");
+                String effectivePvc = usePvc ? pvcName : null;
+                V1Job job = k8sClientService.buildTestJob(
+                        testJobName, dataName, recordName,
+                        imgsz, trainingImage,
+                        effectivePvc, mountPath,
+                        null, null
+                );
+                k8sClientService.createJob(job);
+                log.info("Test job created: {}", testJobName);
 
-                regenerateTestYaml(dataName, imgsz, recordName);
+                Thread.sleep(2000);
 
-                File yamlFile = new File(yamlPath);
-                StringBuilder logBuilder = new StringBuilder();
-
-                if (!yamlFile.exists()) {
-                    logBuilder.append("错误: YAML文件不存在: ").append(yamlPath).append("\n");
-                    logBuilder.append("请先执行训练操作生成配置文件\n");
-                    updateStatus(jobId, "FAILED", 0, logBuilder.toString());
-                    setTestFinalStatus(recordName, "FAILED", null);
-                    return;
+                for (int i = 0; i < 30; i++) {
+                    Thread.sleep(1000);
+                    podName = k8sClientService.getFirstPodNameByJob(testJobName);
+                    if (podName != null) {
+                        final String finalPodName = podName;
+                        trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
+                            r.setTestPodName(finalPodName);
+                            trainingRecordRepository.save(r);
+                        });
+                        break;
+                    }
                 }
 
-                ProcessBuilder pb = new ProcessBuilder("kubectl", "apply", "-f", yamlPath);
-                pb.directory(new File(PROJECT_ROOT));
-                pb.redirectErrorStream(true);
+                if (podName != null) {
+                    final String finalPodName = podName;
+                    int progress = 0;
 
-                Process process = pb.start();
-                BufferedReader processReader = new BufferedReader(new InputStreamReader(process.getInputStream(), "UTF-8"));
-                String processLine;
-                StringBuilder processOutput = new StringBuilder();
-                while ((processLine = processReader.readLine()) != null) {
-                    processOutput.append(processLine).append("\n");
-                }
-                int exitCode = process.waitFor();
-
-                if (exitCode == 0) {
-                    Thread.sleep(2000);
-
-                    for (int i = 0; i < 30; i++) {
+                    while (true) {
                         try {
-                            Thread.sleep(1000);
-                            Process podProcess = new ProcessBuilder("kubectl", "get", "pods", "-l", "job-name=" + recordName + "-test-job", "-o", "name").start();
-                            BufferedReader podReader = new BufferedReader(new InputStreamReader(podProcess.getInputStream(), "UTF-8"));
-                            String podLine = podReader.readLine();
-                            if (podLine != null && podLine.startsWith("pod/")) {
-                                podName = podLine.substring(4);
-                                final String finalPodName = podName;
-                                trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-                                    r.setTestPodName(finalPodName);
-                                    trainingRecordRepository.save(r);
-                                });
+                            Thread.sleep(2000);
+                            if (progress < 90) progress += 5;
+                            updateStatus(jobId, "RUNNING", progress, "", finalPodName);
+
+                            String phase = k8sClientService.getPodPhase(finalPodName);
+                            if ("Succeeded".equals(phase) || "Failed".equals(phase) || "NOT_FOUND".equals(phase)) {
                                 break;
                             }
-                        } catch (Exception e) {
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            break;
                         }
                     }
 
-                    if (podName != null) {
-                        final String finalPodName = podName;
-                        int progress = 0;
+                    String fullLog = k8sClientService.getPodLogs(finalPodName);
+                    String finalLog = fullLog != null ? fullLog : "";
+                    String finalLogLower = finalLog.toLowerCase();
 
-                        while (true) {
-                            try {
-                                Thread.sleep(2000);
-
-                                if (progress < 90) {
-                                    progress += 5;
-                                }
-                                updateStatus(jobId, "RUNNING", progress, "", finalPodName);
-
-                                Process checkProcess = new ProcessBuilder("kubectl", "get", "pod", finalPodName, "-o", "jsonpath={.status.phase}").start();
-                                BufferedReader checkReader = new BufferedReader(new InputStreamReader(checkProcess.getInputStream(), "UTF-8"));
-                                String phase = checkReader.readLine();
-                                checkProcess.waitFor();
-
-                                if ("Succeeded".equals(phase) || "Failed".equals(phase)) {
-                                    break;
-                                }
-                            } catch (Exception e) {
-                            }
-                        }
-
-                        String fullLog = getPodLogs(finalPodName);
-                        if (fullLog == null || fullLog.isEmpty() || fullLog.startsWith("Error:") || fullLog.startsWith("获取日志中")) {
-                            fullLog = getJobLogs(recordName + "-test-job");
-                        }
-
-                        String finalLog = fullLog != null ? fullLog : "";
-                        String finalLogLower = finalLog.toLowerCase();
-
-                        boolean hasFatalError = finalLogLower.contains("fatal error") && !finalLogLower.contains("keyboardinterrupt");
-                        boolean hasSuccessIndicators = finalLogLower.contains("map") ||
+                    boolean hasFatalError = finalLogLower.contains("fatal error") && !finalLogLower.contains("keyboardinterrupt");
+                    boolean hasSuccessIndicators = finalLogLower.contains("map") ||
                             finalLogLower.contains("precision") ||
                             finalLogLower.contains("recall") ||
                             finalLogLower.contains("speed:") ||
                             finalLogLower.contains("results saved") ||
                             finalLogLower.contains("inference");
 
-                        boolean testSuccess = hasSuccessIndicators && !hasFatalError;
+                    boolean testSuccess = hasSuccessIndicators && !hasFatalError;
+                    String actualPhase = k8sClientService.getPodPhase(finalPodName);
 
-                        if (testSuccess) {
-                            String finalLogStr = finalLog + "\nTesting completed successfully\n";
-                            updateStatus(jobId, "COMPLETED", 100, finalLogStr, finalPodName);
-                            persistTestLog(recordName, finalLogStr);
-                            setTestFinalStatus(recordName, "COMPLETED", finalPodName);
-                        } else {
-                            String actualPhase = checkPodActualPhase(finalPodName);
-                            if ("Succeeded".equals(actualPhase)) {
-                                String finalLogStr = finalLog + "\nTesting completed (Pod Succeeded)\n";
-                                updateStatus(jobId, "COMPLETED", 100, finalLogStr, finalPodName);
-                                persistTestLog(recordName, finalLogStr);
-                                setTestFinalStatus(recordName, "COMPLETED", finalPodName);
-                            } else {
-                                String finalLogStr = finalLog + "\nTesting failed\n";
-                                updateStatus(jobId, "FAILED", 0, finalLogStr, finalPodName);
-                                persistTestLog(recordName, finalLogStr);
-                                setTestFinalStatus(recordName, "FAILED", finalPodName);
-                            }
-                        }
+                    if (testSuccess || "Succeeded".equals(actualPhase)) {
+                        String finalLogStr = finalLog + "\nTesting completed successfully\n";
+                        updateStatus(jobId, "COMPLETED", 100, finalLogStr, finalPodName);
+                        persistTestLog(recordName, finalLogStr);
+                        setTestFinalStatus(recordName, "COMPLETED", finalPodName);
                     } else {
-                        logBuilder.append("Failed to find pod\n");
-                        updateStatus(jobId, "FAILED", 0, logBuilder.toString());
-                        setTestFinalStatus(recordName, "FAILED", null);
+                        String finalLogStr = finalLog + "\nTesting failed\n";
+                        updateStatus(jobId, "FAILED", 0, finalLogStr, finalPodName);
+                        persistTestLog(recordName, finalLogStr);
+                        setTestFinalStatus(recordName, "FAILED", finalPodName);
                     }
                 } else {
-                    logBuilder.append("Testing job submission failed: ").append(processOutput).append("\n");
-                    updateStatus(jobId, "FAILED", 0, logBuilder.toString());
+                    String msg = "Failed to find pod for test job: " + testJobName;
+                    updateStatus(jobId, "FAILED", 0, msg);
                     setTestFinalStatus(recordName, "FAILED", null);
                 }
             } catch (Exception e) {
-                String actualPhase = (podName != null) ? checkPodActualPhase(podName) : null;
+                log.error("Testing exception for {}: {}", recordName, e.getMessage(), e);
+                String actualPhase = (podName != null) ? k8sClientService.getPodPhase(podName) : null;
                 if ("Succeeded".equals(actualPhase)) {
-                    String fullLog = getPodLogs(podName);
+                    String fullLog = k8sClientService.getPodLogs(podName);
                     String finalLogStr = (fullLog != null ? fullLog : "") + "\nTesting completed despite exception (Pod Succeeded)\n";
                     updateStatus(jobId, "COMPLETED", 100, finalLogStr, podName);
                     persistTestLog(recordName, finalLogStr);
@@ -443,67 +468,148 @@ public class YoloService {
         return jobId;
     }
 
-    public String getPodLogs(String podName) {
-        try {
-            ProcessBuilder pb = new ProcessBuilder("kubectl", "logs", podName);
-            pb.directory(new File(PROJECT_ROOT));
-            pb.redirectErrorStream(true);
+    public String startTrainingOnNode(String dataName, int epochs, int imgsz, String recordName,
+                                       String nodeName, Map<String, String> nodeSelector,
+                                       Map<String, String> gpuResources) {
+        String effectiveRecordName = (recordName != null && !recordName.isEmpty())
+                ? recordName : dataName + "-e" + epochs + "-i" + imgsz;
+        String jobId = UUID.randomUUID().toString();
+        JobStatus status = new JobStatus(jobId, "RUNNING", 0, "");
+        jobStatusMap.put(jobId, status);
 
-            Process process = pb.start();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), "UTF-8"));
-            StringBuilder logBuilder = new StringBuilder();
-
-            String line;
-            while ((line = reader.readLine()) != null) {
-                logBuilder.append(line).append("\n");
-            }
-
-            process.waitFor();
-            return logBuilder.toString();
-        } catch (Exception e) {
-            return "获取日志中...\n" + e.getMessage();
+        TrainingRecord record = trainingRecordRepository.findByRecordName(effectiveRecordName).orElse(null);
+        if (record == null) {
+            record = new TrainingRecord(dataName, epochs, imgsz, "system");
         }
+        record.setTrainJobId(jobId);
+        record.setTrainStatus("RUNNING");
+        record.setTrainProgress(0);
+        trainingRecordRepository.save(record);
+
+        executorService.submit(() -> {
+            String podName = null;
+            try {
+                String trainJobName = effectiveRecordName + "-train-job";
+                k8sClientService.deleteJob(trainJobName);
+                Thread.sleep(1000);
+
+                String effectivePvc = usePvc ? pvcName : null;
+                V1Job job = k8sClientService.buildTrainingJob(
+                        trainJobName, dataName, effectiveRecordName,
+                        epochs, imgsz, trainingImage,
+                        effectivePvc, mountPath,
+                        nodeName, nodeSelector, gpuResources
+                );
+                k8sClientService.createJob(job);
+                log.info("Distributed training job created: {} on node {}", trainJobName, nodeName);
+
+                for (int i = 0; i < 30; i++) {
+                    Thread.sleep(1000);
+                    podName = k8sClientService.getFirstPodNameByJob(trainJobName);
+                    if (podName != null) {
+                        final String finalPodName = podName;
+                        trainingRecordRepository.findByRecordName(effectiveRecordName).ifPresent(r -> {
+                            r.setTrainPodName(finalPodName);
+                            trainingRecordRepository.save(r);
+                        });
+                        break;
+                    }
+                }
+
+                if (podName != null) {
+                    final String finalPodName = podName;
+                    int progress = 0;
+
+                    while (true) {
+                        try {
+                            Thread.sleep(2000);
+                            String tailLog = k8sClientService.getPodLogs(finalPodName, 10);
+                            int parsedProgress = parseEpochProgress(tailLog);
+                            if (parsedProgress > 0) {
+                                progress = parsedProgress;
+                                final int currentProgress = progress;
+                                trainingRecordRepository.findByRecordName(effectiveRecordName).ifPresent(r -> {
+                                    r.setTrainProgress(currentProgress);
+                                    trainingRecordRepository.save(r);
+                                });
+                            }
+                            updateStatus(jobId, "RUNNING", progress, "", finalPodName);
+
+                            String phase = k8sClientService.getPodPhase(finalPodName);
+                            if ("Succeeded".equals(phase) || "Failed".equals(phase) || "NOT_FOUND".equals(phase)) {
+                                break;
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                    }
+
+                    String fullLog = k8sClientService.getPodLogs(finalPodName);
+                    String finalLog = fullLog != null ? fullLog : "";
+                    String finalLogLower = finalLog.toLowerCase();
+                    boolean hasFatalError = finalLogLower.contains("fatal error") && !finalLogLower.contains("keyboardinterrupt");
+                    boolean hasSuccessIndicators = finalLogLower.contains("results saved") ||
+                            finalLogLower.contains("speed:") || finalLogLower.contains("map50") ||
+                            finalLogLower.contains("optimizer stripped") || finalLogLower.contains("validating");
+                    boolean trainSuccess = hasSuccessIndicators && !hasFatalError;
+                    String actualPhase = k8sClientService.getPodPhase(finalPodName);
+
+                    if (trainSuccess || "Succeeded".equals(actualPhase)) {
+                        String finalLogStr = finalLog + "\nTraining completed successfully\n";
+                        updateStatus(jobId, "COMPLETED", 100, finalLogStr, finalPodName);
+                        persistTrainLog(effectiveRecordName, finalLogStr);
+                        setTrainFinalStatus(effectiveRecordName, "COMPLETED", finalPodName, 100);
+                    } else {
+                        String finalLogStr = finalLog + "\nTraining failed\n";
+                        updateStatus(jobId, "FAILED", 0, finalLogStr, finalPodName);
+                        persistTrainLog(effectiveRecordName, finalLogStr);
+                        setTrainFinalStatus(effectiveRecordName, "FAILED", finalPodName);
+                    }
+                } else {
+                    updateStatus(jobId, "FAILED", 0, "Failed to find pod");
+                    setTrainFinalStatus(effectiveRecordName, "FAILED", null);
+                }
+            } catch (Exception e) {
+                log.error("Distributed training exception for {}: {}", effectiveRecordName, e.getMessage(), e);
+                updateStatus(jobId, "FAILED", 0, "Error: " + e.getMessage());
+                setTrainFinalStatus(effectiveRecordName, "FAILED", podName);
+            }
+        });
+
+        return jobId;
+    }
+
+    public String getPodLogs(String podName) {
+        if (k8sClientService.isReady()) {
+            return k8sClientService.getPodLogs(podName);
+        }
+        return "K8s client not ready";
     }
 
     public String getJobLogs(String jobName) {
-        try {
-            ProcessBuilder pb = new ProcessBuilder("kubectl", "logs", "job/" + jobName);
-            pb.directory(new File(PROJECT_ROOT));
-            pb.redirectErrorStream(true);
-
-            Process process = pb.start();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), "UTF-8"));
-            StringBuilder output = new StringBuilder();
-            String line;
-
-            while ((line = reader.readLine()) != null) {
-                output.append(line).append("\n");
+        if (k8sClientService.isReady()) {
+            String podName = k8sClientService.getFirstPodNameByJob(jobName);
+            if (podName != null) {
+                return k8sClientService.getPodLogs(podName);
             }
-
-            process.waitFor();
-            return output.toString();
-        } catch (Exception e) {
-            return "Error: " + e.getMessage();
         }
+        return "Error: Could not retrieve job logs";
     }
 
     public String listPods() {
+        if (!k8sClientService.isReady()) return "K8s client not ready";
         try {
-            ProcessBuilder pb = new ProcessBuilder("kubectl", "get", "pods", "-o", "wide");
-            pb.directory(new File(PROJECT_ROOT));
-            pb.redirectErrorStream(true);
-
-            Process process = pb.start();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), "UTF-8"));
-            StringBuilder output = new StringBuilder();
-            String line;
-
-            while ((line = reader.readLine()) != null) {
-                output.append(line).append("\n");
+            var nodes = k8sClientService.getNodeInfoList();
+            StringBuilder sb = new StringBuilder();
+            sb.append("NAME\t\tSTATUS\t\tROLES\t\tIP\n");
+            for (var node : nodes) {
+                sb.append(node.get("name")).append("\t\t")
+                        .append(node.get("ready")).append("\t\t")
+                        .append(node.get("roles")).append("\t\t")
+                        .append(node.get("ip")).append("\n");
             }
-
-            process.waitFor();
-            return output.toString();
+            return sb.toString();
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
@@ -534,7 +640,7 @@ public class YoloService {
                 trainingRecordRepository.save(r);
             });
         } catch (Exception e) {
-            System.out.println("设置训练最终状态失败: " + recordName + " -> " + status + ": " + e.getMessage());
+            log.error("Failed to set train final status: {} -> {}", recordName, status, e);
         }
     }
 
@@ -548,20 +654,7 @@ public class YoloService {
                 trainingRecordRepository.save(r);
             });
         } catch (Exception e) {
-            System.out.println("设置测试最终状态失败: " + recordName + " -> " + status + ": " + e.getMessage());
-        }
-    }
-
-    private String checkPodActualPhase(String podName) {
-        if (podName == null || podName.isEmpty()) return null;
-        try {
-            Process checkProcess = new ProcessBuilder("kubectl", "get", "pod", podName, "-o", "jsonpath={.status.phase}").start();
-            BufferedReader checkReader = new BufferedReader(new InputStreamReader(checkProcess.getInputStream(), StandardCharsets.UTF_8));
-            String phase = checkReader.readLine();
-            checkProcess.waitFor();
-            return phase;
-        } catch (Exception e) {
-            return null;
+            log.error("Failed to set test final status: {} -> {}", recordName, status, e);
         }
     }
 
@@ -586,7 +679,7 @@ public class YoloService {
                 try {
                     trainingSchedulerService.cancelTask(recName);
                 } catch (Exception e) {
-                    System.out.println("通知调度器取消任务(可忽略): " + recName + " - " + e.getMessage());
+                    log.debug("Cancel task notification (ignorable): {} - {}", recName, e.getMessage());
                 }
             }
 
@@ -594,19 +687,19 @@ public class YoloService {
                 trainingRecordRepository.deleteByDataName(dataName);
                 datasetRepository.findByName(dataName).ifPresent(datasetRepository::delete);
             });
-            logBuilder.append("数据库已提交删除：数据集 ").append(dataName).append(" 及关联 training_records\n");
+            logBuilder.append("Database deleted: dataset ").append(dataName).append(" and related training_records\n");
 
             for (String recName : recordNames) {
                 bestEffortDeleteRecordAssets(recName);
-                logBuilder.append("已尽力清理训练任务资源: ").append(recName).append("\n");
+                logBuilder.append("Cleaned up training task resources: ").append(recName).append("\n");
             }
 
-            String processedDir = PROJECT_ROOT + "\\" + dataName + "_processed";
+            String processedDir = PROJECT_ROOT + dataName + "_processed";
             try {
                 deleteDirectory(new File(processedDir));
-                logBuilder.append("已删除预处理目录: ").append(processedDir).append("\n");
+                logBuilder.append("Deleted preprocessed directory: ").append(processedDir).append("\n");
             } catch (Exception e) {
-                logBuilder.append("删除预处理目录失败(可手动删): ").append(e.getMessage()).append("\n");
+                logBuilder.append("Failed to delete preprocessed directory (manual delete): ").append(e.getMessage()).append("\n");
             }
 
             return logBuilder.toString();
@@ -616,32 +709,24 @@ public class YoloService {
     }
 
     public boolean deleteTrainingRecord(String recordName) {
-        if (recordName == null || recordName.isBlank()) {
-            return false;
-        }
-        if (!trainingRecordRepository.existsByRecordName(recordName)) {
-            return false;
-        }
+        if (recordName == null || recordName.isBlank()) return false;
+        if (!trainingRecordRepository.existsByRecordName(recordName)) return false;
 
         trainingRecordRepository.findByRecordName(recordName).ifPresent(record -> {
-            if (record.getTrainJobId() != null) {
-                jobStatusMap.remove(record.getTrainJobId());
-            }
-            if (record.getTestJobId() != null) {
-                jobStatusMap.remove(record.getTestJobId());
-            }
+            if (record.getTrainJobId() != null) jobStatusMap.remove(record.getTrainJobId());
+            if (record.getTestJobId() != null) jobStatusMap.remove(record.getTestJobId());
         });
 
         try {
             trainingSchedulerService.cancelTask(recordName);
         } catch (Exception e) {
-            System.out.println("通知调度器取消任务(可忽略): " + e.getMessage());
+            log.debug("Cancel task notification (ignorable): {}", e.getMessage());
         }
 
         try {
             transactionTemplate.executeWithoutResult(status -> trainingRecordRepository.deleteByRecordName(recordName));
         } catch (Exception e) {
-            throw new IllegalStateException("数据库删除训练记录失败（请确认事务与表映射正常）: " + e.getMessage(), e);
+            throw new IllegalStateException("Failed to delete training record: " + e.getMessage(), e);
         }
         bestEffortDeleteRecordAssets(recordName);
         return true;
@@ -649,23 +734,18 @@ public class YoloService {
 
     private void bestEffortDeleteRecordAssets(String recordName) {
         try {
-            deleteK8sJob(recordName + "-train-job");
-            deleteK8sJob(recordName + "-test-job");
-            deleteK8sPodsByJob(recordName + "-train-job");
-            deleteK8sPodsByJob(recordName + "-test-job");
+            k8sClientService.deleteJob(recordName + "-train-job");
+            k8sClientService.deleteJob(recordName + "-test-job");
+            k8sClientService.deletePodsByJob(recordName + "-train-job");
+            k8sClientService.deletePodsByJob(recordName + "-test-job");
         } catch (Exception e) {
-            System.out.println("K8s 清理异常(可忽略): " + e.getMessage());
+            log.debug("K8s cleanup exception (ignorable): {}", e.getMessage());
         }
         try {
-            new File(PROJECT_ROOT + "\\k8s_jobs\\" + recordName + "-train.yaml").delete();
-            new File(PROJECT_ROOT + "\\k8s_jobs\\" + recordName + "-test.yaml").delete();
-        } catch (Exception ignored) {
-        }
-        try {
-            deleteDirectory(new File(PROJECT_ROOT + "\\runs\\detect\\" + recordName + "_train"));
-            deleteDirectory(new File(PROJECT_ROOT + "\\runs\\detect\\" + recordName + "_train_test"));
+            deleteDirectory(new File(PROJECT_ROOT + "runs/detect/" + recordName + "_train"));
+            deleteDirectory(new File(PROJECT_ROOT + "runs/detect/" + recordName + "_train_test"));
         } catch (Exception e) {
-            System.out.println("runs 目录清理: " + e.getMessage());
+            log.debug("Runs directory cleanup: {}", e.getMessage());
         }
         try {
             new File(LOGS_DIR, recordName + "-train.txt").delete();
@@ -676,10 +756,8 @@ public class YoloService {
 
     public List<DatasetStatus> getDatasetStatusList() {
         List<DatasetStatus> result = new ArrayList<>();
-
         try {
             List<Dataset> datasets = datasetRepository.findAll();
-
             for (Dataset dataset : datasets) {
                 DatasetStatus ds = new DatasetStatus(dataset.getName());
                 ds.setInputPath(dataset.getInputPath());
@@ -688,22 +766,22 @@ public class YoloService {
                 result.add(ds);
             }
         } catch (Exception e) {
+            log.error("Failed to get dataset status list", e);
         }
-
         return result;
     }
 
     public String saveModel(String dataName, String modelType, String savePath, String recordName) {
         try {
             String trainDirName = (recordName != null && !recordName.isEmpty()) ? recordName + "_train" : dataName + "_processed_train";
-            String sourceDir = PROJECT_ROOT + "\\runs\\detect\\" + trainDirName + "\\weights";
+            String sourceDir = PROJECT_ROOT + "runs/detect/" + trainDirName + "/weights";
 
             File sourceDirectory = new File(sourceDir);
             if (!sourceDirectory.exists()) {
-                sourceDir = PROJECT_ROOT + "\\runs\\detect\\" + dataName + "_processed_train\\weights";
+                sourceDir = PROJECT_ROOT + "runs/detect/" + dataName + "_processed_train/weights";
                 sourceDirectory = new File(sourceDir);
                 if (!sourceDirectory.exists()) {
-                    return "错误: 模型目录不存在: " + sourceDir;
+                    return "Error: model directory does not exist: " + sourceDir;
                 }
             }
 
@@ -711,11 +789,11 @@ public class YoloService {
             File sourceFile = new File(sourceDir, sourceFileName);
 
             if (!sourceFile.exists()) {
-                return "错误: 模型文件不存在: " + sourceFile.getPath();
+                return "Error: model file does not exist: " + sourceFile.getPath();
             }
 
             if (savePath == null || savePath.trim().isEmpty()) {
-                savePath = PROJECT_ROOT + "\\saved_models";
+                savePath = PROJECT_ROOT + "saved_models";
             }
 
             File destDirectory = new File(savePath);
@@ -730,13 +808,13 @@ public class YoloService {
 
             return destFile.getAbsolutePath();
         } catch (Exception e) {
-            return "保存失败: " + e.getMessage();
+            return "Save failed: " + e.getMessage();
         }
     }
 
     public List<String> getSavedModels() {
         List<String> models = new ArrayList<>();
-        String destDir = PROJECT_ROOT + "\\saved_models";
+        String destDir = PROJECT_ROOT + "saved_models";
         File destDirectory = new File(destDir);
 
         if (destDirectory.exists() && destDirectory.isDirectory()) {
@@ -747,7 +825,6 @@ public class YoloService {
                 }
             }
         }
-
         return models;
     }
 
@@ -765,24 +842,15 @@ public class YoloService {
             for (TrainingRecord rec : allRecords) {
                 String recName = rec.getRecordName();
                 if (recName != null && !recName.isEmpty()) {
-                    deleteK8sJob(recName + "-train-job");
-                    deleteK8sJob(recName + "-test-job");
-                    deleteK8sPodsByJob(recName + "-train-job");
-                    deleteK8sPodsByJob(recName + "-test-job");
-                    String trainYaml = PROJECT_ROOT + "\\k8s_jobs\\" + recName + "-train.yaml";
-                    String testYaml = PROJECT_ROOT + "\\k8s_jobs\\" + recName + "-test.yaml";
-                    new File(trainYaml).delete();
-                    new File(testYaml).delete();
+                    k8sClientService.deleteJob(recName + "-train-job");
+                    k8sClientService.deleteJob(recName + "-test-job");
+                    k8sClientService.deletePodsByJob(recName + "-train-job");
+                    k8sClientService.deletePodsByJob(recName + "-test-job");
                 }
             }
             trainingRecordRepository.deleteAll();
 
-            File k8sJobsDir = new File(PROJECT_ROOT + "\\k8s_jobs");
-            if (k8sJobsDir.exists()) {
-                for (File f : k8sJobsDir.listFiles()) { f.delete(); }
-            }
-
-            File runsDir = new File(PROJECT_ROOT + "\\runs\\detect");
+            File runsDir = new File(PROJECT_ROOT + "runs/detect");
             if (runsDir.exists()) {
                 deleteDirectory(runsDir);
             }
@@ -817,36 +885,6 @@ public class YoloService {
         }
     }
 
-    private void deleteK8sJob(String jobName) {
-        try {
-            ProcessBuilder pb = new ProcessBuilder("kubectl", "delete", "job", jobName, "--ignore-not-found=true");
-            pb.directory(new File(PROJECT_ROOT));
-            pb.redirectErrorStream(true);
-            Process process = pb.start();
-            if (!process.waitFor(45, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-            }
-            System.out.println("已删除旧Job: " + jobName);
-        } catch (Exception e) {
-            System.out.println("删除旧Job失败(可忽略): " + jobName + " - " + e.getMessage());
-        }
-    }
-
-    private void deleteK8sPodsByJob(String jobName) {
-        try {
-            ProcessBuilder pb = new ProcessBuilder("kubectl", "delete", "pod", "-l", "job-name=" + jobName, "--ignore-not-found=true");
-            pb.directory(new File(PROJECT_ROOT));
-            pb.redirectErrorStream(true);
-            Process process = pb.start();
-            if (!process.waitFor(45, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-            }
-            System.out.println("已删除关联Pod: job-name=" + jobName);
-        } catch (Exception e) {
-            System.out.println("删除Pod失败(可忽略): " + jobName + " - " + e.getMessage());
-        }
-    }
-
     public void saveLogToFile(String logName, String content) {
         try {
             File dir = new File(LOGS_DIR);
@@ -855,9 +893,9 @@ public class YoloService {
             try (FileWriter writer = new FileWriter(file)) {
                 writer.write(content);
             }
-            System.out.println("日志已保存: " + file.getAbsolutePath());
+            log.info("Log saved: {}", file.getAbsolutePath());
         } catch (Exception e) {
-            System.out.println("保存日志失败: " + logName + " - " + e.getMessage());
+            log.error("Failed to save log: {} - {}", logName, e.getMessage());
         }
     }
 
@@ -882,14 +920,10 @@ public class YoloService {
     }
 
     public String readLogContentByFileName(String logFileName) {
-        if (logFileName == null || logFileName.isBlank()) {
-            return null;
-        }
+        if (logFileName == null || logFileName.isBlank()) return null;
         try {
             File file = new File(LOGS_DIR, logFileName.trim());
-            if (!file.isFile()) {
-                return null;
-            }
+            if (!file.isFile()) return null;
             StringBuilder sb = new StringBuilder();
             try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
                 String line;
@@ -920,64 +954,10 @@ public class YoloService {
         }
     }
 
-    private void regenerateTrainYaml(String dataName, int epochs, int imgsz, String recordName) {
+    private int parseEpochProgress(String logContent) {
+        if (logContent == null || logContent.isEmpty()) return 0;
         try {
-            executeGenerateYamlScript(dataName, "train", epochs, imgsz, recordName);
-        } catch (Exception e) {
-            System.out.println("重新生成训练YAML失败: " + e.getMessage());
-        }
-    }
-
-    private void regenerateTestYaml(String dataName, int imgsz, String recordName) {
-        try {
-            executeGenerateYamlScript(dataName, "test", 0, imgsz, recordName);
-        } catch (Exception e) {
-            System.out.println("重新生成测试YAML失败: " + e.getMessage());
-        }
-    }
-
-    private void executeGenerateYamlScript(String dataName, String jobType, int epochs, int imgsz, String recordName) throws Exception {
-        java.util.List<String> command = new java.util.ArrayList<>();
-        command.add("python");
-        command.add(GENERATE_YAML_SCRIPT);
-        command.add("--data_name");
-        command.add(dataName);
-        command.add("--job_type");
-        command.add(jobType);
-        command.add("--output_dir");
-        command.add(PROJECT_ROOT + "\\k8s_jobs");
-        if ("train".equals(jobType)) {
-            command.add("--epochs");
-            command.add(String.valueOf(epochs));
-        }
-        command.add("--imgsz");
-        command.add(String.valueOf(imgsz));
-        if (recordName != null && !recordName.isEmpty()) {
-            command.add("--record_name");
-            command.add(recordName);
-        }
-
-        ProcessBuilder pb = new ProcessBuilder(command);
-        pb.directory(new File(PROJECT_ROOT));
-        pb.redirectErrorStream(true);
-
-        Process process = pb.start();
-        BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), "UTF-8"));
-        String line;
-        while ((line = reader.readLine()) != null) {
-            System.out.println(line);
-        }
-
-        int exitCode = process.waitFor();
-        if (exitCode != 0) {
-            throw new RuntimeException("生成YAML失败，退出码: " + exitCode);
-        }
-    }
-
-    private int parseEpochProgress(String log) {
-        if (log == null || log.isEmpty()) return 0;
-        try {
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)/(\\d+)\\s+\\d+G", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(log);
+            Matcher m = Pattern.compile("(\\d+)/(\\d+)\\s+\\d+G", Pattern.CASE_INSENSITIVE).matcher(logContent);
             int maxEpoch = 0, totalEpochs = 0;
             while (m.find()) {
                 int current = Integer.parseInt(m.group(1));
@@ -988,10 +968,9 @@ public class YoloService {
                 }
             }
             if (totalEpochs > 0) {
-                int progress = (maxEpoch * 100) / totalEpochs;
-                return Math.min(progress, 100);
+                return Math.min((maxEpoch * 100) / totalEpochs, 100);
             }
-        } catch (Exception e) {
+        } catch (Exception ignored) {
         }
         return 0;
     }

@@ -38,7 +38,8 @@ def main():
     print(f"正在训练{site}样本集")
     print(f"训练参数: epochs={args.epochs}, imgsz={args.imgsz}, name={train_name}")
 
-    model = YOLO("yolov8n.pt")
+    model_path = "/app/workspace/yolov8n.pt" if os.path.exists("/app/workspace/yolov8n.pt") else "yolov8n.pt"
+    model = YOLO(model_path)
     model.train(
         data=data_yaml,
         epochs=args.epochs,
