@@ -3,7 +3,6 @@ import os, shutil
 os.environ['YOLO_CONFIG_DIR'] = '/tmp/Ultralytics'
 os.environ['ULTRALYTICS_DISABLE_AUTOUPDATE'] = '1'
 
-# 离线环境：确保字体文件存在，避免 check_font() 触发网络下载而崩溃
 YOLO_DIR = '/tmp/Ultralytics'
 os.makedirs(YOLO_DIR, exist_ok=True)
 FONT_PATH = os.path.join(YOLO_DIR, 'Arial.ttf')
@@ -30,13 +29,18 @@ def main():
     parser.add_argument('--name', type=str, default=None, help="训练输出目录名")
     args = parser.parse_args()
 
+    data_root = os.environ.get('DATA_ROOT', '/app/data')
+    project_dir = os.path.join(data_root, "runs", "detect")
     site = args.site
+    if not os.path.isabs(site):
+        site = os.path.join(data_root, site)
     data_yaml = f"{site}/data.yaml"
 
     train_name = args.name if args.name else f"{site}_train"
 
     print(f"正在训练{site}样本集")
     print(f"训练参数: epochs={args.epochs}, imgsz={args.imgsz}, name={train_name}")
+    print(f"输出目录: {project_dir}/{train_name}")
 
     model_path = "/app/workspace/yolov8n.pt" if os.path.exists("/app/workspace/yolov8n.pt") else "yolov8n.pt"
     model = YOLO(model_path)
@@ -47,6 +51,7 @@ def main():
         batch=4,
         workers=1,
         name=train_name,
+        project=project_dir,
         device="cpu",
         plots=False,
         visualize=False,

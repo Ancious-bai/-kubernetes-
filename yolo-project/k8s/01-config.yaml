@@ -18,10 +18,10 @@ metadata:
   name: yolo-backend-config
   namespace: yolo-system
 data:
-  PROJECT_ROOT: "/app/workspace"
+  PROJECT_ROOT: "/app/data"
   TRAINING_IMAGE: "<REGISTRY>/yolov8-trainer:v1.0.0"
   PVC_NAME: "yolo-workspace"
-  MOUNT_PATH: "/app/workspace"
+  MOUNT_PATH: "/app/data"
   USE_PVC: "true"
   K8S_NAMESPACE: "yolo-system"
   SPRING_PROFILES_ACTIVE: "prod"

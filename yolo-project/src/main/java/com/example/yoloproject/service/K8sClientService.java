@@ -416,11 +416,18 @@ public class K8sClientService {
         V1Container container = new V1Container();
         container.setName("yolo-container");
         container.setImage(imageName);
-        container.setImagePullPolicy("Always");
-        container.setWorkingDir(mountPath != null ? mountPath : "/app/workspace");
+        container.setImagePullPolicy("IfNotPresent");
+        container.setWorkingDir("/app/workspace");
+
+        String effectiveInputDir = inputDir;
+        if (inputDir != null && inputDir.startsWith("/app/workspace/")) {
+            effectiveInputDir = inputDir.replace("/app/workspace/", "/app/data/");
+        } else if (inputDir != null && !inputDir.startsWith("/")) {
+            effectiveInputDir = "/app/data/" + inputDir;
+        }
 
         List<String> command = Arrays.asList("python3", "/app/workspace/preprocess.py",
-                "--input_dir", inputDir);
+                "--input_dir", effectiveInputDir);
         container.setCommand(command);
 
         V1EnvVar envVar = new V1EnvVar();
@@ -431,7 +438,7 @@ public class K8sClientService {
         if (pvcName != null && !pvcName.isEmpty()) {
             V1VolumeMount volumeMount = new V1VolumeMount();
             volumeMount.setName("app-volume");
-            volumeMount.setMountPath(mountPath != null ? mountPath : "/app/workspace");
+            volumeMount.setMountPath("/app/data");
             container.setVolumeMounts(Collections.singletonList(volumeMount));
         }
 
@@ -504,9 +511,9 @@ public class K8sClientService {
         V1Container container = new V1Container();
         container.setName("yolo-container");
         container.setImage(imageName);
-        container.setImagePullPolicy("Always");
+        container.setImagePullPolicy("IfNotPresent");
 
-        container.setWorkingDir(mountPath != null ? mountPath : "/app/workspace");
+        container.setWorkingDir("/app/workspace");
 
         List<String> command = Arrays.asList("python3", "/app/workspace/train_yolo.py",
                 "--site", dataName + "_processed",
@@ -523,7 +530,7 @@ public class K8sClientService {
         if (pvcName != null && !pvcName.isEmpty()) {
             V1VolumeMount volumeMount = new V1VolumeMount();
             volumeMount.setName("app-volume");
-            volumeMount.setMountPath(mountPath != null ? mountPath : "/app/workspace");
+            volumeMount.setMountPath("/app/data");
             container.setVolumeMounts(Collections.singletonList(volumeMount));
         }
 
@@ -605,9 +612,9 @@ public class K8sClientService {
         V1Container container = new V1Container();
         container.setName("yolo-container");
         container.setImage(imageName);
-        container.setImagePullPolicy("Always");
+        container.setImagePullPolicy("IfNotPresent");
 
-        container.setWorkingDir(mountPath != null ? mountPath : "/app/workspace");
+        container.setWorkingDir("/app/workspace");
 
         List<String> command = Arrays.asList("python3", "/app/workspace/test_yolo.py",
                 "--site", dataName + "_processed",
@@ -623,7 +630,7 @@ public class K8sClientService {
         if (pvcName != null && !pvcName.isEmpty()) {
             V1VolumeMount volumeMount = new V1VolumeMount();
             volumeMount.setName("app-volume");
-            volumeMount.setMountPath(mountPath != null ? mountPath : "/app/workspace");
+            volumeMount.setMountPath("/app/data");
             container.setVolumeMounts(Collections.singletonList(volumeMount));
         }
 

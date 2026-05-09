@@ -243,12 +243,12 @@ def generate_yaml(data_root: Path):
 
     # 构建 YAML 数据
     yaml_data = {
-        "path": "./"+str(os.path.basename(data_root)),  # 相对路径（如 "./data_processed"）
-        "train": "images/train",  # 训练集图像路径（相对于 path）
-        "val": "images/val",      # 验证集图像路径
-        "test": "images/test",    # 测试集图像路径
-        "nc": 1,                  # 类别数量
-        "names": ["gangue"]      # 类别名称
+        "path": str(data_root.resolve()),
+        "train": "images/train",
+        "val": "images/val",
+        "test": "images/test",
+        "nc": 1,
+        "names": ["gangue"]
     }
 
     # 写入 YAML 文件
@@ -270,9 +270,9 @@ if __name__ == "__main__":
         print(f"[ERROR] 输入路径不存在: {data_root}")
         exit(1)
 
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    data_parent = os.path.dirname(data_root)
     data_name = os.path.basename(data_root)
-    out_root = os.path.join(project_root, f"{data_name}_processed")
+    out_root = os.path.join(data_parent, f"{data_name}_processed")
 
     print(f"输入数据路径: {data_root}")
     print(f"输出结果路径: {out_root}")

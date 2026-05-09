@@ -199,7 +199,7 @@ public class YoloController {
         String dataName;
         String effectivePath;
 
-        if (inputDir.startsWith("/") || inputDir.startsWith("/app/workspace")) {
+        if (inputDir.startsWith("/") || inputDir.startsWith("/app/data")) {
             effectivePath = inputDir;
             dataName = new File(inputDir).getName();
         } else {
@@ -244,7 +244,7 @@ public class YoloController {
             String dataName;
             String effectivePath;
 
-            if (inputDir.startsWith("/") || inputDir.startsWith("/app/workspace")) {
+            if (inputDir.startsWith("/") || inputDir.startsWith("/app/data")) {
                 effectivePath = inputDir;
                 dataName = new File(inputDir).getName();
             } else {

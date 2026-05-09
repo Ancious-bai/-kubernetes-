@@ -21,6 +21,7 @@ RUN pip install --no-cache-dir torch torchvision --extra-index-url https://downl
 COPY train_yolo.py /app/workspace/train_yolo.py
 COPY test_yolo.py /app/workspace/test_yolo.py
 COPY preprocess.py /app/workspace/preprocess.py
+COPY mask_yolo.py /app/workspace/mask_yolo.py
 COPY yolov8n.pt /app/workspace/yolov8n.pt
 
 ENV YOLO_CONFIG_DIR=/tmp/Ultralytics

@@ -23,7 +23,7 @@ app:
   project-root: ${PROJECT_ROOT:./}
   training-image: ${TRAINING_IMAGE:yolov8-project:latest}
   pvc-name: ${PVC_NAME:yolo-workspace}
-  mount-path: ${MOUNT_PATH:/app/workspace}
+  mount-path: ${MOUNT_PATH:/app/data}
   use-pvc: ${USE_PVC:false}
   k8s-namespace: ${K8S_NAMESPACE:default}
 

@@ -35,22 +35,23 @@ def main():
     parser.add_argument('--name', type=str, default=None, help="训练输出目录名")
     args = parser.parse_args()
 
+    data_root = os.environ.get('DATA_ROOT', '/app/data')
+    project_dir = os.path.join(data_root, "runs", "detect")
     site = args.site
+    if not os.path.isabs(site):
+        site = os.path.join(data_root, site)
     data_yaml = f"{site}/data.yaml"
 
     train_name = args.name if args.name else f"{site}_train"
-    model_path = f"runs/detect/{train_name}/weights/best.pt"
+    model_path = os.path.join(project_dir, train_name, "weights", "best.pt")
     print(f"Using model: {model_path}")
 
-    import glob
-    model_files = glob.glob(model_path)
-    if not model_files:
-        print(f"没有找到{site}的训练模型！")
+    if not os.path.exists(model_path):
+        print(f"没有找到{site}的训练模型！路径: {model_path}")
         return
 
-    model = YOLO(model_files[0])
+    model = YOLO(model_path)
     test_name = train_name + "_test"
-    # 确保字体在调用 val() 前已就位（离线容器关键修复）
     if not os.path.exists(FONT_PATH) or os.path.getsize(FONT_PATH) == 0:
         for src in SYSTEM_FONT_CANDIDATES:
             if os.path.exists(src):
@@ -62,6 +63,7 @@ def main():
         batch=4,
         workers=1,
         name=test_name,
+        project=project_dir,
         device="cpu",
         plots=False,
         visualize=False,
