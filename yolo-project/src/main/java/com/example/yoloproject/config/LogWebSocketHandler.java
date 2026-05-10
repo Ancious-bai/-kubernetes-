@@ -215,7 +215,7 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
                 String logs = k8sClientService.getPodLogs(podName);
 
                 if (logs != null && !logs.isEmpty() && !logs.startsWith("Error")) {
-                    String cleaned = logs.replace("\x1b[K", "\n").replace("\u001B[K", "\n");
+                    String cleaned = logs.replace("\u001B[K", "\n");
                     String[] lines = cleaned.split("\n");
                     int currentCount = lastLineCount.get();
                     if (lines.length > currentCount) {
@@ -233,7 +233,7 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
                     cancelRetry(logKey);
                     String finalLogs = k8sClientService.getPodLogs(podName);
                     if (finalLogs != null && !finalLogs.isEmpty()) {
-                        String cleaned = finalLogs.replace("\x1b[K", "\n").replace("\u001B[K", "\n");
+                        String cleaned = finalLogs.replace("\u001B[K", "\n");
                         String[] lines = cleaned.split("\n");
                         StringBuilder newLines = new StringBuilder();
                         for (int i = lastLineCount.get(); i < lines.length; i++) {
