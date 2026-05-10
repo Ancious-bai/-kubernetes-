@@ -7,6 +7,7 @@ import io.kubernetes.client.openapi.apis.BatchV1Api;
 import io.kubernetes.client.openapi.apis.CoreV1Api;
 import io.kubernetes.client.openapi.models.*;
 import io.kubernetes.client.custom.Quantity;
+import io.kubernetes.client.custom.V1Patch;
 import io.kubernetes.client.util.ClientBuilder;
 import io.kubernetes.client.util.KubeConfig;
 import io.kubernetes.client.util.Streams;
@@ -737,9 +738,8 @@ public class K8sClientService {
     }
 
     public void cordonNode(String nodeName, boolean unschedulable) throws ApiException {
-        V1Node node = coreApi.readNode(nodeName).execute();
-        if (node == null || node.getSpec() == null) return;
-        node.getSpec().setUnschedulable(unschedulable);
-        coreApi.patchNode(nodeName, node).execute();
+        String patchJson = "{\"spec\":{\"unschedulable\":" + unschedulable + "}}";
+        V1Patch patch = new V1Patch(patchJson);
+        coreApi.patchNode(nodeName, patch).execute();
     }
 }
