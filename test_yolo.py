@@ -44,6 +44,7 @@ def main():
 
     base_name = args.name if args.name else site
     train_name = base_name + "_train"
+    test_name = base_name + "_test"
     model_path = os.path.join(project_dir, train_name, "weights", "best.pt")
     print(f"Using model: {model_path}")
 
@@ -52,7 +53,6 @@ def main():
         return
 
     model = YOLO(model_path)
-    test_name = base_name + "_test"
     if not os.path.exists(FONT_PATH) or os.path.getsize(FONT_PATH) == 0:
         for src in SYSTEM_FONT_CANDIDATES:
             if os.path.exists(src):

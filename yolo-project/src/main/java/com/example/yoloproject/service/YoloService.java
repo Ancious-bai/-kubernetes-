@@ -779,6 +779,8 @@ public class YoloService {
             try {
                 forceDeleteDirectory(new File(PROJECT_ROOT + "runs/detect/" + asyncRecordName + "_train"));
                 forceDeleteDirectory(new File(PROJECT_ROOT + "runs/detect/" + asyncRecordName + "_test"));
+                new File(LOGS_DIR, asyncRecordName + "-train.txt").delete();
+                new File(LOGS_DIR, asyncRecordName + "-test.txt").delete();
             } catch (Exception e) {
                 log.warn("Async runs directory cleanup for {}: {}", asyncRecordName, e.getMessage());
             }
