@@ -141,13 +141,26 @@ public class NodeController {
             return ResponseEntity.status(403).build();
         }
         Integer maxConcurrent = ((Number) request.get("maxConcurrent")).intValue();
-        if (maxConcurrent < 1 || maxConcurrent > 10) {
+        if (maxConcurrent < 1) {
             Map<String, String> response = new HashMap<>();
-            response.put("message", "并发数必须在1-10之间");
+            response.put("message", "并发数不能为0，如需停止调度请使用停止调度按钮");
             response.put("status", "error");
             return ResponseEntity.badRequest().body(response);
         }
         try {
+            com.example.yoloproject.entity.NodeInfo nodeInfo = nodeManagementService.getNodeByName(nodeName).orElse(null);
+            if (nodeInfo != null && nodeInfo.getCpuAllocatable() != null) {
+                try {
+                    int cpuCores = Integer.parseInt(nodeInfo.getCpuAllocatable());
+                    if (maxConcurrent > cpuCores) {
+                        Map<String, String> response = new HashMap<>();
+                        response.put("message", "并发数不能超过CPU核心数(" + cpuCores + ")");
+                        response.put("status", "error");
+                        return ResponseEntity.badRequest().body(response);
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
             nodeManagementService.setNodeMaxConcurrent(nodeName, maxConcurrent);
             authService.logOperation(null, username, "CONFIG_CHANGE", nodeName,
                     "节点 " + nodeName + " 最大并发数设为: " + maxConcurrent);

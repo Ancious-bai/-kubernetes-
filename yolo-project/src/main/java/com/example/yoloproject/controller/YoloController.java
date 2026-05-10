@@ -358,34 +358,73 @@ public class YoloController {
         }
     }
 
-    @PostMapping("/model/save")
-    public ResponseEntity<Map<String, String>> saveModel(@RequestBody Map<String, String> request, HttpServletRequest httpRequest) {
-        String dataName = request.get("dataName");
-        String modelType = request.get("modelType");
-        String savePath = request.get("savePath");
-        String recordName = request.get("recordName");
-        String username = (String) httpRequest.getAttribute("username");
+    @GetMapping("/model/download")
+    public ResponseEntity<Map<String, Object>> getModelDownloadInfo(@RequestParam String dataName,
+                                                                      @RequestParam String modelType,
+                                                                      @RequestParam(required = false) String recordName,
+                                                                      HttpServletRequest httpRequest) {
+        try {
+            String trainDirName = (recordName != null && !recordName.isEmpty()) ? recordName + "_train" : dataName + "_processed_train";
+            String sourceDir = yoloService.getProjectRoot() + "runs/detect/" + trainDirName + "/weights";
 
-        String result = yoloService.saveModel(dataName, modelType, savePath, recordName);
+            File sourceDirectory = new File(sourceDir);
+            if (!sourceDirectory.exists()) {
+                sourceDir = yoloService.getProjectRoot() + "runs/detect/" + dataName + "_processed_train/weights";
+                sourceDirectory = new File(sourceDir);
+                if (!sourceDirectory.exists()) {
+                    Map<String, Object> err = new HashMap<>();
+                    err.put("message", "模型目录不存在");
+                    err.put("status", "error");
+                    return ResponseEntity.badRequest().body(err);
+                }
+            }
 
-        Map<String, String> response = new HashMap<>();
-        if (result != null && !result.startsWith("Error:") && !result.startsWith("Save failed:") && !result.contains("does not exist")) {
-            authService.logOperation(null, username, "SAVE_MODEL", recordName != null ? recordName : dataName, "保存模型: " + modelType);
-            response.put("message", "模型保存成功");
-            response.put("path", result);
+            String sourceFileName = modelType.equalsIgnoreCase("best") ? "best.pt" : "last.pt";
+            File sourceFile = new File(sourceDir, sourceFileName);
+
+            if (!sourceFile.exists()) {
+                Map<String, Object> err = new HashMap<>();
+                err.put("message", "模型文件不存在: " + sourceFileName);
+                err.put("status", "error");
+                return ResponseEntity.badRequest().body(err);
+            }
+
+            String username = (String) httpRequest.getAttribute("username");
+            authService.logOperation(null, username, "SAVE_MODEL", recordName != null ? recordName : dataName, "下载模型: " + modelType);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("path", sourceFile.getAbsolutePath());
+            response.put("fileName", (recordName != null ? recordName + "_" : "") + modelType + ".pt");
             response.put("status", "success");
             return ResponseEntity.ok(response);
-        } else {
-            response.put("message", result);
-            response.put("status", "error");
-            return ResponseEntity.badRequest().body(response);
+        } catch (Exception e) {
+            Map<String, Object> err = new HashMap<>();
+            err.put("message", "获取模型信息失败: " + e.getMessage());
+            err.put("status", "error");
+            return ResponseEntity.status(500).body(err);
         }
     }
 
-    @GetMapping("/model/list")
-    public ResponseEntity<List<String>> getSavedModels() {
-        List<String> models = yoloService.getSavedModels();
-        return ResponseEntity.ok(models);
+    @GetMapping("/model/file")
+    public ResponseEntity<org.springframework.core.io.Resource> downloadModelFile(@RequestParam String path, HttpServletRequest httpRequest) {
+        try {
+            java.io.File file = new java.io.File(path);
+            if (!file.exists() || !file.isFile()) {
+                return ResponseEntity.notFound().build();
+            }
+            if (!file.getCanonicalPath().startsWith(new java.io.File(yoloService.getProjectRoot()).getCanonicalPath())) {
+                return ResponseEntity.status(403).build();
+            }
+            org.springframework.core.io.Resource resource = new org.springframework.core.io.FileSystemResource(file);
+            String contentType = "application/octet-stream";
+            String headerValue = "attachment; filename=\"" + file.getName() + "\"";
+            return ResponseEntity.ok()
+                    .contentType(org.springframework.http.MediaType.parseMediaType(contentType))
+                    .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, headerValue)
+                    .body(resource);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().build();
+        }
     }
 
     @DeleteMapping("/datasets/{dataName}")

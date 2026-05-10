@@ -27,7 +27,19 @@ public class NodeManagementService {
     private K8sClientService k8sClientService;
 
     public List<NodeInfo> getAllNodes() {
-        return nodeInfoRepository.findAll();
+        List<NodeInfo> nodes = nodeInfoRepository.findAll();
+        if (k8sClientService.isReady()) {
+            for (NodeInfo node : nodes) {
+                try {
+                    Map<String, Object> allocated = k8sClientService.getNodeAllocatedResources(node.getNodeName());
+                    int runningPods = (int) allocated.getOrDefault("runningPods", 0);
+                    node.setCurrentTasks(runningPods);
+                } catch (Exception e) {
+                    node.setCurrentTasks(0);
+                }
+            }
+        }
+        return nodes;
     }
 
     public List<NodeInfo> getReadyNodes() {
@@ -116,6 +128,19 @@ public class NodeManagementService {
             dbNode.setRoles((String) roles);
         }
 
+        boolean k8sSchedulable = !(Boolean) clusterInfo.getOrDefault("unschedulable", false);
+        if (dbNode.getId() == null) {
+            dbNode.setSchedulable(k8sSchedulable);
+        } else if (!dbNode.getSchedulable() && k8sSchedulable) {
+            try {
+                k8sClientService.cordonNode(dbNode.getNodeName(), true);
+            } catch (Exception e) {
+                log.warn("Re-cordon node {} failed: {}", dbNode.getNodeName(), e.getMessage());
+            }
+        } else {
+            dbNode.setSchedulable(k8sSchedulable);
+        }
+
         Map<String, String> capacity = (Map<String, String>) clusterInfo.get("capacity");
         if (capacity != null) {
             dbNode.setCpuCapacity(capacity.get("cpu"));
@@ -133,7 +158,6 @@ public class NodeManagementService {
         }
 
         dbNode.setKubeletVersion((String) clusterInfo.get("kubeletVersion"));
-        dbNode.setSchedulable(!(Boolean) clusterInfo.getOrDefault("unschedulable", false));
 
         Map<String, String> labels = (Map<String, String>) clusterInfo.get("labels");
         if (labels != null) {
@@ -191,6 +215,11 @@ public class NodeManagementService {
         NodeInfo node = nodeInfoRepository.findByNodeName(nodeName).orElse(null);
         if (node == null) {
             throw new IllegalArgumentException("Node not found: " + nodeName);
+        }
+        try {
+            k8sClientService.cordonNode(nodeName, !schedulable);
+        } catch (Exception e) {
+            log.warn("Failed to cordon/uncordon node {} in K8s: {}", nodeName, e.getMessage());
         }
         node.setSchedulable(schedulable);
         return nodeInfoRepository.save(node);

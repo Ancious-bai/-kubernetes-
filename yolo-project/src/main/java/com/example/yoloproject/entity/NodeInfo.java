@@ -122,4 +122,14 @@ public class NodeInfo {
 
     public Integer getMaxConcurrentTasks() { return maxConcurrentTasks; }
     public void setMaxConcurrentTasks(Integer maxConcurrentTasks) { this.maxConcurrentTasks = maxConcurrentTasks; }
+
+    @Transient
+    private Integer currentTasks = 0;
+
+    public Integer getCurrentTasks() { return currentTasks; }
+    public void setCurrentTasks(Integer currentTasks) { this.currentTasks = currentTasks; }
+
+    public Integer getRemainingSlots() {
+        return Math.max(0, (maxConcurrentTasks != null ? maxConcurrentTasks : 1) - (currentTasks != null ? currentTasks : 0));
+    }
 }

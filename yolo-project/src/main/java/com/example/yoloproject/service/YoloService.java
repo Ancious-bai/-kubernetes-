@@ -714,21 +714,24 @@ public class YoloService {
                 log.debug("Preprocess K8s cleanup: {}", e.getMessage());
             }
 
-            String processedDir = PROJECT_ROOT + dataName + "_processed";
-            try {
-                deleteDirectory(new File(processedDir));
-                logBuilder.append("Deleted preprocessed directory: ").append(processedDir).append("\n");
-            } catch (Exception e) {
-                logBuilder.append("Failed to delete preprocessed directory (manual delete): ").append(e.getMessage()).append("\n");
-            }
+            final String asyncDataName = dataName;
+            executorService.submit(() -> {
+                String processedDir = PROJECT_ROOT + asyncDataName + "_processed";
+                try {
+                    forceDeleteDirectory(new File(processedDir));
+                    log.info("Deleted preprocessed directory: {}", processedDir);
+                } catch (Exception e) {
+                    log.warn("Failed to delete preprocessed directory: {}", e.getMessage());
+                }
 
-            String rawDir = PROJECT_ROOT + dataName;
-            try {
-                deleteDirectory(new File(rawDir));
-                logBuilder.append("Deleted raw data directory: ").append(rawDir).append("\n");
-            } catch (Exception e) {
-                logBuilder.append("Failed to delete raw data directory (manual delete): ").append(e.getMessage()).append("\n");
-            }
+                String rawDir = PROJECT_ROOT + asyncDataName;
+                try {
+                    forceDeleteDirectory(new File(rawDir));
+                    log.info("Deleted raw data directory: {}", rawDir);
+                } catch (Exception e) {
+                    log.warn("Failed to delete raw data directory: {}", e.getMessage());
+                }
+            });
 
             return logBuilder.toString();
         } catch (Exception e) {
@@ -751,12 +754,28 @@ public class YoloService {
             log.debug("Cancel task notification (ignorable): {}", e.getMessage());
         }
 
+        bestEffortDeleteRecordAssets(recordName);
+
         try {
             transactionTemplate.executeWithoutResult(status -> trainingRecordRepository.deleteByRecordName(recordName));
         } catch (Exception e) {
             throw new IllegalStateException("Failed to delete training record: " + e.getMessage(), e);
         }
-        bestEffortDeleteRecordAssets(recordName);
+
+        final String asyncRecordName = recordName;
+        executorService.submit(() -> {
+            try {
+                forceDeleteDirectory(new File(PROJECT_ROOT + "runs/detect/" + asyncRecordName + "_train"));
+                forceDeleteDirectory(new File(PROJECT_ROOT + "runs/detect/" + asyncRecordName + "_train_test"));
+            } catch (Exception e) {
+                log.warn("Async runs directory cleanup for {}: {}", asyncRecordName, e.getMessage());
+            }
+            try {
+                new File(LOGS_DIR, asyncRecordName + "-train.txt").delete();
+                new File(LOGS_DIR, asyncRecordName + "-test.txt").delete();
+            } catch (Exception ignored) {
+            }
+        });
         return true;
     }
 
@@ -769,16 +788,29 @@ public class YoloService {
         } catch (Exception e) {
             log.debug("K8s cleanup exception (ignorable): {}", e.getMessage());
         }
+    }
+
+    private void forceDeleteDirectory(File dir) {
+        if (!dir.exists()) return;
         try {
-            deleteDirectory(new File(PROJECT_ROOT + "runs/detect/" + recordName + "_train"));
-            deleteDirectory(new File(PROJECT_ROOT + "runs/detect/" + recordName + "_train_test"));
+            ProcessBuilder pb;
+            if (System.getProperty("os.name").toLowerCase().contains("win")) {
+                pb = new ProcessBuilder("cmd", "/c", "rmdir", "/s", "/q", dir.getAbsolutePath());
+            } else {
+                pb = new ProcessBuilder("rm", "-rf", dir.getAbsolutePath());
+            }
+            pb.redirectErrorStream(true);
+            Process proc = pb.start();
+            proc.waitFor(30, TimeUnit.SECONDS);
+            proc.destroyForcibly();
+            if (!dir.exists()) {
+                log.info("Force deleted directory: {}", dir.getAbsolutePath());
+            } else {
+                deleteDirectory(dir);
+            }
         } catch (Exception e) {
-            log.debug("Runs directory cleanup: {}", e.getMessage());
-        }
-        try {
-            new File(LOGS_DIR, recordName + "-train.txt").delete();
-            new File(LOGS_DIR, recordName + "-test.txt").delete();
-        } catch (Exception ignored) {
+            log.warn("Force delete failed, falling back to recursive delete for {}: {}", dir.getAbsolutePath(), e.getMessage());
+            deleteDirectory(dir);
         }
     }
 
@@ -883,24 +915,31 @@ public class YoloService {
                     k8sClientService.deleteJob(K8sClientService.sanitizeK8sName(ds.getName() + "-preprocess-job"));
                     k8sClientService.deletePodsByJob(K8sClientService.sanitizeK8sName(ds.getName() + "-preprocess-job"));
                 } catch (Exception ignored) {}
-                try {
-                    deleteDirectory(new File(PROJECT_ROOT + ds.getName() + "_processed"));
-                    deleteDirectory(new File(PROJECT_ROOT + ds.getName()));
-                } catch (Exception ignored) {}
-            }
-
-            File runsDir = new File(PROJECT_ROOT + "runs/detect");
-            if (runsDir.exists()) {
-                deleteDirectory(runsDir);
-            }
-
-            File logsDir = new File(LOGS_DIR);
-            if (logsDir.exists()) {
-                deleteDirectory(logsDir);
-                logsDir.mkdirs();
             }
 
             jobStatusMap.clear();
+
+            executorService.submit(() -> {
+                for (Dataset ds : allDatasets) {
+                    try {
+                        forceDeleteDirectory(new File(PROJECT_ROOT + ds.getName() + "_processed"));
+                        forceDeleteDirectory(new File(PROJECT_ROOT + ds.getName()));
+                    } catch (Exception ignored) {}
+                }
+                File runsDir = new File(PROJECT_ROOT + "runs/detect");
+                if (runsDir.exists()) {
+                    forceDeleteDirectory(runsDir);
+                }
+                File logsDir = new File(LOGS_DIR);
+                if (logsDir.exists()) {
+                    forceDeleteDirectory(logsDir);
+                    logsDir.mkdirs();
+                }
+                File savedModelsDir = new File(PROJECT_ROOT + "saved_models");
+                if (savedModelsDir.exists()) {
+                    forceDeleteDirectory(savedModelsDir);
+                }
+            });
 
             result.put("deletedDatasets", allDatasets.size());
             result.put("deletedRecords", allRecords.size());

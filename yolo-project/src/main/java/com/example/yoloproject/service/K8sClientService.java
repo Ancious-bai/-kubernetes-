@@ -735,4 +735,11 @@ public class K8sClientService {
         }
         return null;
     }
+
+    public void cordonNode(String nodeName, boolean unschedulable) throws ApiException {
+        V1Node node = coreApi.readNode(nodeName).execute();
+        if (node == null || node.getSpec() == null) return;
+        node.getSpec().setUnschedulable(unschedulable);
+        coreApi.patchNode(nodeName, node).execute();
+    }
 }

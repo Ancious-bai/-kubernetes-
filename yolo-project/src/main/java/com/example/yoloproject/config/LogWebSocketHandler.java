@@ -181,11 +181,6 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void startLogStream(WebSocketSession session, String recordName, String type, String podName) {
-        String logKey = recordName + "-" + type;
-        boolean isTraining = "train".equals(type);
-        String typeLabel = isTraining ? "训练" : "测试";
-
-        sendMessage(session, typeLabel + "状态: Running\nPod: " + podName + "\n开始获取实时日志...\n");
         startPollingLogStream(session, recordName, type, podName);
     }
 
@@ -193,6 +188,22 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
         String logKey = recordName + "-" + type;
         StringBuilder logBuilder = logBuilders.get(logKey);
         java.util.concurrent.atomic.AtomicInteger lastLineCount = new java.util.concurrent.atomic.AtomicInteger(0);
+
+        // On reconnection, load existing saved log first to avoid missing content
+        try {
+            Path savedLogPath = Paths.get(yoloService.LOGS_DIR, recordName + "-" + type + ".txt");
+            if (Files.exists(savedLogPath)) {
+                String savedLog = Files.readString(savedLogPath, StandardCharsets.UTF_8);
+                if (savedLog != null && !savedLog.isEmpty()) {
+                    sendMessage(session, savedLog);
+                    if (logBuilder != null) logBuilder.append(savedLog);
+                    String[] lines = savedLog.split("\n");
+                    lastLineCount.set(lines.length);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to load saved log on reconnection: {}", e.getMessage());
+        }
 
         ScheduledFuture<?> pollFuture = retryExecutor.scheduleAtFixedRate(() -> {
             try {

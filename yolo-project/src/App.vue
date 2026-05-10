@@ -189,6 +189,7 @@
           <el-card shadow="hover" class="overview-card overview-ready"><div class="overview-value">{{ clusterOverview.readyNodes || 0 }}</div><div class="overview-label">就绪节点</div></el-card>
           <el-card shadow="hover" class="overview-card overview-gpu"><div class="overview-value">{{ clusterOverview.gpuNodes || 0 }}</div><div class="overview-label">GPU节点</div></el-card>
           <el-card shadow="hover" class="overview-card overview-concurrent"><div class="overview-value">{{ totalMaxConcurrent }}</div><div class="overview-label">最大并发</div></el-card>
+          <el-card shadow="hover" class="overview-card overview-remaining"><div class="overview-value">{{ totalRemainingSlots }}</div><div class="overview-label">剩余可用</div></el-card>
         </div>
 
         <el-card shadow="hover" style="margin-top:14px">
@@ -204,6 +205,8 @@
                 <th class="col-nmem">内存</th>
                 <th class="col-ngpu">GPU</th>
                 <th class="col-nconc">并发数</th>
+                <th class="col-ntasks">当前任务</th>
+                <th class="col-nremain">剩余</th>
                 <th class="col-nact">操作</th>
               </tr></thead>
               <tbody>
@@ -216,7 +219,9 @@
                   <td><span>{{ row.cpuAllocatable }}</span></td>
                   <td><span>{{ formatMemory(row.memoryAllocatable) }}</span></td>
                   <td><span>{{ row.gpuAllocatable }}</span></td>
-                  <td><div class="node-concurrent"><el-input-number v-model="row._editMaxConcurrent" size="small" :min="0" :max="10" style="width:72px" /><el-button type="primary" size="small" @click="handleNodeMaxConcurrentChange(row)">保存</el-button></div></td>
+                  <td><div class="node-concurrent"><el-input-number v-model="row._editMaxConcurrent" size="small" :min="1" :max="getCpuCoreCount(row)" style="width:72px" /><el-button type="primary" size="small" @click="handleNodeMaxConcurrentChange(row)">保存</el-button></div></td>
+                  <td><el-tag size="small" type="warning">{{ row.currentTasks || 0 }}</el-tag></td>
+                  <td><el-tag :type="(row.remainingSlots||0)>0?'success':'danger'" size="small">{{ row.remainingSlots || 0 }}</el-tag></td>
                   <td><div class="record-actions"><el-button v-if="row.schedulable" size="small" type="warning" @click="cordonNode(row.nodeName)">停止调度</el-button><el-button v-else size="small" type="success" @click="uncordonNode(row.nodeName)">恢复调度</el-button></div></td>
                 </tr>
               </tbody>
@@ -227,13 +232,12 @@
       </div>
     </main>
 
-    <el-dialog title="保存模型" v-model="saveModelDialogVisible" width="480px" :close-on-click-modal="false">
+    <el-dialog title="下载模型" v-model="saveModelDialogVisible" width="480px" :close-on-click-modal="false">
       <el-form :model="saveModelForm" label-width="80px">
         <el-form-item label="记录"><el-tag type="success">{{ saveModelForm.recordName }}</el-tag></el-form-item>
         <el-form-item label="类型"><el-radio-group v-model="saveModelForm.modelType"><el-radio label="best">最佳模型(best.pt)</el-radio><el-radio label="last">最后模型(last.pt)</el-radio></el-radio-group></el-form-item>
-        <el-form-item label="保存路径"><div class="save-path-row"><el-input v-model="saveModelForm.savePath" placeholder="默认项目saved_models目录" /></div></el-form-item>
       </el-form>
-      <template #footer><el-button type="primary" @click="confirmSaveModel" :loading="saveModelLoading">保存</el-button></template>
+      <template #footer><el-button type="primary" @click="confirmSaveModel" :loading="saveModelLoading">下载模型</el-button></template>
     </el-dialog>
 
     <el-dialog title="分布式训练配置" v-model="showDistributedTrainDialog" width="520px" :close-on-click-modal="false">
@@ -304,6 +308,7 @@ const clusterNodes=ref([]),clusterOverview=reactive({totalNodes:0,readyNodes:0,g
 const showDistributedTrainDialog=ref(false),distributedTrainForm=reactive({dataName:'',epochs:2,imgsz:640,priority:5,targetNode:'',gpuType:'',gpuCount:1})
 const schedulableNodes=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable))
 const totalMaxConcurrent=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+(n.maxConcurrentTasks||1),0))
+const totalRemainingSlots=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+(n.remainingSlots||0),0))
 const workerNodesOnly=computed(()=>clusterNodes.value.filter(n=>!n.roles?.includes('control-plane')&&!n.roles?.includes('master')))
 
 const wsConnections=new Map()
@@ -332,7 +337,7 @@ const switchToLogs=()=>{activePage.value='logs';loadOperationLogs()}
 const switchToUsers=()=>{activePage.value='users';loadUsers()}
 const switchToNodes=()=>{activePage.value='nodes';loadClusterNodes();loadClusterOverview()}
 
-const loadClusterNodes=async()=>{try{const r=await api.value.get('/api/nodes');clusterNodes.value=r.data.map(n=>({...n,_editMaxConcurrent:n.maxConcurrentTasks||1}))}catch(e){}}
+const loadClusterNodes=async()=>{try{const r=await api.value.get('/api/nodes');clusterNodes.value=r.data.map(n=>({...n,_editMaxConcurrent:n.maxConcurrentTasks||1,currentTasks:n.currentTasks||0,remainingSlots:n.remainingSlots!=null?n.remainingSlots:(n.maxConcurrentTasks||1)-(n.currentTasks||0)}))}catch(e){}}
 const loadClusterOverview=async()=>{try{const r=await api.value.get('/api/nodes/overview');Object.assign(clusterOverview,r.data)}catch(e){}}
 const syncNodes=async()=>{nodesSyncing.value=true;try{await api.value.post('/api/nodes/sync');await loadClusterNodes();await loadClusterOverview();showMsg('节点同步完成')}catch(e){showMsg('同步失败','error')}finally{nodesSyncing.value=false}}
 const cordonNode=async(name)=>{try{await api.value.post(`/api/nodes/${name}/cordon`);showMsg(`节点 ${name} 已停止调度`);await loadClusterNodes()}catch(e){showMsg('操作失败','error')}}
@@ -399,7 +404,7 @@ const handleDeleteRecord=(rec)=>{recordToDelete.value=rec.recordName;deleteRecor
 const confirmDeleteRecord=async()=>{const rn=recordToDelete.value;try{closeWsConnection(rn+'-train');closeWsConnection(rn+'-test');delete trainLogs.value[rn];delete testLogs.value[rn];await api.value.delete(`/api/training-records/${encodeURIComponent(rn)}`);showMsg('训练记录已删除');await refreshDatasets();await loadTrainingRecords()}catch(e){showMsg(e.response?.data?.message||(e.response?.status===404?'记录不存在':'删除失败'),'error')}finally{deleteRecordConfirmVisible.value=false}}
 
 const showSaveModelDialog=rec=>{saveModelForm.dataName=rec.dataName;saveModelForm.recordName=rec.recordName;saveModelForm.modelType='best';saveModelForm.savePath='';saveModelDialogVisible.value=true}
-const confirmSaveModel=async()=>{saveModelLoading.value=true;try{const r=await api.value.post('/api/model/save',{dataName:saveModelForm.dataName,modelType:saveModelForm.modelType,savePath:saveModelForm.savePath,recordName:saveModelForm.recordName});if(r.data.status==='success'){showMsg('模型保存成功');saveModelDialogVisible.value=false}}catch(e){showMsg(e.response?.data?.message||'保存失败','error')}finally{saveModelLoading.value=false}}
+const confirmSaveModel=async()=>{saveModelLoading.value=true;try{const r=await api.value.get('/api/model/download',{params:{dataName:saveModelForm.dataName,modelType:saveModelForm.modelType,recordName:saveModelForm.recordName}});if(r.data.status==='success'&&r.data.path){const downloadUrl='/api/model/file?path='+encodeURIComponent(r.data.path);const a=document.createElement('a');a.href=downloadUrl;a.download=r.data.fileName||saveModelForm.modelType+'.pt';document.body.appendChild(a);a.click();document.body.removeChild(a);showMsg('模型下载已开始');saveModelDialogVisible.value=false}else{showMsg(r.data.message||'模型文件不存在','error')}}catch(e){showMsg(e.response?.data?.message||'下载失败','error')}finally{saveModelLoading.value=false}}
 
 const handleDeleteDataset=dn=>{datasetToDelete.value=dn;deleteConfirmVisible.value=true}
 const confirmDelete=async()=>{try{const dn=datasetToDelete.value;const recs=trainingRecords.value.filter(r=>r.dataName===dn);recs.forEach(r=>{closeWsConnection(r.recordName+'-train');closeWsConnection(r.recordName+'-test');delete trainLogs.value[r.recordName];delete testLogs.value[r.recordName]});delete preprocessLogs.value[dn];delete processingStatus.value[dn];await api.value.delete(`/api/datasets/${encodeURIComponent(dn)}`);await refreshDatasets();await loadTrainingRecords();showMsg('数据集及关联资源已删除')}catch(e){showMsg(e.response?.data?.message||(e.response?.status===404?'数据集不存在':'删除失败'),'error')}finally{deleteConfirmVisible.value=false}}
@@ -420,7 +425,8 @@ const handleSizeChange=v=>{pageSize.value=v;currentPage.value=1}
 const handleCurrentChange=v=>{currentPage.value=v}
 const getStatusClass=s=>{if(s==='RUNNING')return'warning';if(s==='QUEUED')return'primary';if(s==='COMPLETED')return'success';if(s==='FAILED')return'danger';return'info'}
 const getStatusText=(s,t)=>{const p=t==='train'?'训练':'测试';if(s==='RUNNING')return p+'中';if(s==='QUEUED')return'排队中';if(s==='COMPLETED')return'已完成';if(s==='FAILED')return'失败';return t==='train'?'未训练':'未测试'}
-const formatMemory=v=>{if(!v)return'-';const n=parseInt(v);if(isNaN(n))return v;if(n>=1073741824)return(n/1073741824).toFixed(1)+'GB';if(n>=1048576)return(n/1048576).toFixed(0)+'MB';if(n>=1024)return(n/1024).toFixed(0)+'KB';return n+'B'}
+const formatMemory=v=>{if(!v)return'-';const s=String(v).trim();let bytes=0;const m=s.match(/^(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti|Pi|Ei|K|M|G|T|P|E)?$/i);if(m){const num=parseFloat(m[1]);const unit=(m[2]||'').toUpperCase();const units={KI:1024,MI:1024*1024,GI:1024*1024*1024,TI:1024*1024*1024*1024,PI:1024*1024*1024*1024*1024,EI:1024*1024*1024*1024*1024*1024,K:1000,M:1000*1000,G:1000*1000*1000,T:1000*1000*1000*1000,P:1000*1000*1000*1000*1000,E:1000*1000*1000*1000*1000*1000};bytes=num*(units[unit]||1)}else{const n=parseInt(s);if(isNaN(n))return v;bytes=n}if(bytes>=1073741824)return(bytes/1073741824).toFixed(1)+'GB';if(bytes>=1048576)return(bytes/1048576).toFixed(0)+'MB';if(bytes>=1024)return(bytes/1024).toFixed(0)+'KB';return bytes+'B'}
+const getCpuCoreCount=row=>{const v=row.cpuAllocatable||row.cpuCapacity||'4';const n=parseInt(v);return isNaN(n)?4:n}
 
 const setLogRef=(n,t,el)=>{if(el)logRefs.value[`${n}-${t}`]=el}
 const autoScroll=(n,t)=>{nextTick(()=>{const el=logRefs.value[`${n}-${t}`];if(el){const distanceToBottom=el.scrollHeight-el.scrollTop-el.clientHeight;if(distanceToBottom<=100)el.scrollTop=el.scrollHeight}})}
@@ -483,7 +489,7 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 .records-table th{background:#f5f7fa;padding:7px 4px;text-align:center;font-weight:600;color:#606266;border:1px solid #ebeef5;white-space:nowrap}
 .records-table td{padding:6px 4px;text-align:center;vertical-align:middle;border:1px solid #ebeef5}
 .col-priority{width:90px}.col-epoch{width:80px}.col-imgsz{width:90px}.col-node{width:200px}.col-tstatus{width:140px}.col-estatus{width:100px}
-.col-nname{width:120px}.col-nip{width:130px}.col-nrole{width:80px}.col-nstatus{width:70px}.col-nsched{width:65px}.col-ncpu{width:55px}.col-nmem{width:85px}.col-ngpu{width:55px}.col-nconc{width:170px}.col-nact{width:190px}
+.col-nname{width:120px}.col-nip{width:130px}.col-nrole{width:80px}.col-nstatus{width:70px}.col-nsched{width:65px}.col-ncpu{width:55px}.col-nmem{width:85px}.col-ngpu{width:55px}.col-nconc{width:170px}.col-ntasks{width:80px}.col-nremain{width:65px}.col-nact{width:190px}
 .col-luser{width:100px}.col-laction{width:140px}.col-ltarget{width:150px}.col-ldetail{width:200px}.col-ltime{width:170px}
 .col-uuser{width:130px}.col-urole{width:100px}.col-utime{width:170px}.col-uact{width:200px}
 .param-fixed{font-weight:600;color:#303133}.status-cell{display:flex;flex-direction:column;align-items:center;gap:2px}
@@ -511,6 +517,7 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 .overview-ready .overview-value{color:#67c23a}
 .overview-gpu .overview-value{color:#e6a23c}
 .overview-concurrent .overview-value{color:#409eff}
+.overview-remaining .overview-value{color:#67c23a}
 
 .node-concurrent{display:flex;align-items:center;gap:4px;justify-content:center}
 
