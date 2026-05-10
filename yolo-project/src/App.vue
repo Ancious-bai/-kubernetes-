@@ -429,10 +429,8 @@ const formatMemory=v=>{if(!v)return'-';const s=String(v).trim();let bytes=0;cons
 const getCpuCoreCount=row=>{const v=row.cpuAllocatable||row.cpuCapacity||'4';const n=parseInt(v);return isNaN(n)?4:n}
 
 const parseTrainLog=log=>{
-if(!log)return{status:'empty',progress:null,rows:[],best:null,header:''}
-const hasQueued=/排队中|QUEUED|等待调度/.test(log)
-const hasRunning=/Starting training|Epoch\s+GPU_mem|^\d+\/\d+\s+\d*G?\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+\d+\s+\d+\s*:/m.test(log)
-if(hasQueued&&!hasRunning)return{status:'queued',progress:null,rows:[],best:null,header:''}
+if(!log)return{status:'empty',progress:null,rows:[],header:''}
+if(/排队中|QUEUED|等待调度/.test(log)&&!/Starting training|optimizer:|Image sizes|Epoch\s+GPU_mem/.test(log))return{status:'queued',progress:null,rows:[],header:''}
 let c=log.replace(/\x1b\[[0-9;]*[a-zA-Z]/g,'\n')
 c=c.replace(/\[K/g,'\n')
 c=c.replace(/\[[\d;]*m/g,'')
@@ -443,7 +441,6 @@ const seen=new Set()
 for(const s of segments){const t=s.trim();if(t&&!seen.has(t)){seen.add(t);lines.push(t)}}
 const rows=[]
 const used=new Set()
-let started=false
 let currentProgress=null
 let headerLines=[]
 let headerDone=false
@@ -454,7 +451,6 @@ if(/Epoch\s+GPU_mem\s+box_loss/.test(t)){headerDone=true;continue}
 if(/^\d+\/\d+\s+\d*G?\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+\d+\s+\d+\s*:/.test(t)){headerDone=true}
 else{headerLines.push(t);continue}
 }
-if(/Starting training/.test(t))started=true
 const em=t.match(/^(\d+\/\d+)\s+(\d*G?)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)\s+(\d+)\s*:\s*(\d+)%/)
 if(em){
 const pct=parseInt(em[8])
@@ -469,17 +465,15 @@ if(/^\d+\/\d+/.test(lines[j]))break
 }
 let ci=-1
 for(let i=0;i<lines.length;i++)if(/epochs?\s+completed/.test(lines[i])){ci=i;break}
-let best=null
 if(ci>=0){
 for(let j=ci+1;j<lines.length;j++){
 const vm=lines[j].match(/^all\s+(\d+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/)
-if(vm&&!used.has(j)){best={e:'best',i:vm[1],n:vm[2],p:vm[3],r:vm[4],m5:vm[5],m9:vm[6]};break}
+if(vm&&!used.has(j)){rows.push({e:'best',i:vm[1],n:vm[2],p:vm[3],r:vm[4],m5:vm[5],m9:vm[6]});break}
 if(/Speed:/.test(lines[j]))break
 }
 }
-if(!started&&!currentProgress&&rows.length===0)return{status:'waiting',progress:null,rows:[],best:null,header:headerLines.join('\n')}
-if(best)rows.push(best)
-return{status:'training',progress:currentProgress,rows,best:null,header:headerLines.join('\n')}
+if(rows.length===0&&currentProgress===null&&headerLines.length===0)return{status:'waiting',progress:null,rows:[],header:''}
+return{status:'training',progress:currentProgress,rows,header:headerLines.join('\n')}
 }
 
 const setLogRef=(n,t,el)=>{if(el)logRefs.value[`${n}-${t}`]=el}

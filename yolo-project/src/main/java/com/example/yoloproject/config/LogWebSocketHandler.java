@@ -186,17 +186,16 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
 
     private void startPollingLogStream(WebSocketSession session, String recordName, String type, String podName) {
         String logKey = recordName + "-" + type;
-        StringBuilder logBuilder = logBuilders.get(logKey);
+        StringBuilder logBuilder = logBuilders.computeIfAbsent(logKey, k -> new StringBuilder());
         java.util.concurrent.atomic.AtomicInteger lastLineCount = new java.util.concurrent.atomic.AtomicInteger(0);
 
-        // On reconnection, load existing saved log first to avoid missing content
         try {
             Path savedLogPath = Paths.get(yoloService.LOGS_DIR, recordName + "-" + type + ".txt");
             if (Files.exists(savedLogPath)) {
                 String savedLog = Files.readString(savedLogPath, StandardCharsets.UTF_8);
                 if (savedLog != null && !savedLog.isEmpty()) {
                     sendMessage(session, savedLog);
-                    if (logBuilder != null) logBuilder.append(savedLog);
+                    logBuilder.append(savedLog);
                     String[] lines = savedLog.split("\n");
                     lastLineCount.set(lines.length);
                 }
@@ -216,7 +215,8 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
                 String logs = k8sClientService.getPodLogs(podName);
 
                 if (logs != null && !logs.isEmpty() && !logs.startsWith("Error")) {
-                    String[] lines = logs.split("\n");
+                    String cleaned = logs.replace("\x1b[K", "\n").replace("\u001B[K", "\n");
+                    String[] lines = cleaned.split("\n");
                     int currentCount = lastLineCount.get();
                     if (lines.length > currentCount) {
                         StringBuilder newLines = new StringBuilder();
@@ -224,16 +224,27 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
                             newLines.append(lines[i]).append("\n");
                         }
                         lastLineCount.set(lines.length);
-                        if (logBuilder != null) logBuilder.append(newLines);
+                        logBuilder.append(newLines);
                         sendMessage(session, newLines.toString());
                     }
                 }
 
                 if ("Succeeded".equals(phase) || "Failed".equals(phase) || "NOT_FOUND".equals(phase)) {
                     cancelRetry(logKey);
-                    if (logBuilder != null && logBuilder.length() > 0) {
-                        saveLog(recordName, type, logBuilder.toString());
+                    String finalLogs = k8sClientService.getPodLogs(podName);
+                    if (finalLogs != null && !finalLogs.isEmpty()) {
+                        String cleaned = finalLogs.replace("\x1b[K", "\n").replace("\u001B[K", "\n");
+                        String[] lines = cleaned.split("\n");
+                        StringBuilder newLines = new StringBuilder();
+                        for (int i = lastLineCount.get(); i < lines.length; i++) {
+                            newLines.append(lines[i]).append("\n");
+                        }
+                        if (newLines.length() > 0) {
+                            logBuilder.append(newLines);
+                            sendMessage(session, newLines.toString());
+                        }
                     }
+                    saveLog(recordName, type, logBuilder.toString());
                     try { if (session.isOpen()) session.close(); } catch (Exception ignored) {}
                 }
             } catch (Exception e) {

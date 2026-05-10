@@ -753,7 +753,6 @@ public class YoloService {
 
     public boolean deleteTrainingRecord(String recordName) {
         if (recordName == null || recordName.isBlank()) return false;
-        if (!trainingRecordRepository.existsByRecordName(recordName)) return false;
 
         trainingRecordRepository.findByRecordName(recordName).ifPresent(record -> {
             if (record.getTrainJobId() != null) jobStatusMap.remove(record.getTrainJobId());
@@ -767,6 +766,11 @@ public class YoloService {
         }
 
         bestEffortDeleteRecordAssets(recordName);
+
+        if (!trainingRecordRepository.existsByRecordName(recordName)) {
+            log.info("Training record already deleted: {}", recordName);
+            return true;
+        }
 
         try {
             transactionTemplate.executeWithoutResult(status -> trainingRecordRepository.deleteByRecordName(recordName));
@@ -783,11 +787,6 @@ public class YoloService {
                 new File(LOGS_DIR, asyncRecordName + "-test.txt").delete();
             } catch (Exception e) {
                 log.warn("Async runs directory cleanup for {}: {}", asyncRecordName, e.getMessage());
-            }
-            try {
-                new File(LOGS_DIR, asyncRecordName + "-train.txt").delete();
-                new File(LOGS_DIR, asyncRecordName + "-test.txt").delete();
-            } catch (Exception ignored) {
             }
         });
         return true;

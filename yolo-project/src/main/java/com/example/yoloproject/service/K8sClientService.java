@@ -131,7 +131,7 @@ public class K8sClientService {
     public boolean deleteJob(String jobName) {
         try {
             V1DeleteOptions deleteOptions = new V1DeleteOptions();
-            deleteOptions.setPropagationPolicy("Background");
+            deleteOptions.setPropagationPolicy("Foreground");
             batchApi.deleteNamespacedJob(jobName, namespace)
                     .body(deleteOptions)
                     .execute();
@@ -237,6 +237,10 @@ public class K8sClientService {
             log.info("Deleted pods for job: {}", jobName);
             return true;
         } catch (ApiException e) {
+            if (e.getCode() == 404) {
+                log.debug("Pods not found (already deleted) for job: {}", jobName);
+                return true;
+            }
             log.error("Failed to delete pods for job {}: {}", jobName, e.getMessage());
             return false;
         }
