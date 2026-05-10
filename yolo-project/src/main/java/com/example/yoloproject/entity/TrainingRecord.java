@@ -61,6 +61,9 @@ public class TrainingRecord {
     @Column(name = "test_log_file", length = 512)
     private String testLogFile;
 
+    @Column(name = "target_node")
+    private String targetNode;
+
     public TrainingRecord() {
     }
 
@@ -108,4 +111,6 @@ public class TrainingRecord {
     public void setTrainLogFile(String trainLogFile) { this.trainLogFile = trainLogFile; }
     public String getTestLogFile() { return testLogFile; }
     public void setTestLogFile(String testLogFile) { this.testLogFile = testLogFile; }
+    public String getTargetNode() { return targetNode; }
+    public void setTargetNode(String targetNode) { this.targetNode = targetNode; }
 }

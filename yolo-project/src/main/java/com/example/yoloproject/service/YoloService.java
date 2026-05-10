@@ -649,6 +649,7 @@ public class YoloService {
                 }
                 trainingRecordRepository.save(r);
             });
+            saveLogToFile(recordName, "train");
         } catch (Exception e) {
             log.error("Failed to set train final status: {} -> {}", recordName, status, e);
         }
@@ -663,6 +664,7 @@ public class YoloService {
                 }
                 trainingRecordRepository.save(r);
             });
+            saveLogToFile(recordName, "test");
         } catch (Exception e) {
             log.error("Failed to set test final status: {} -> {}", recordName, status, e);
         }
@@ -925,6 +927,45 @@ public class YoloService {
                 }
             }
             dir.delete();
+        }
+    }
+
+    public void saveLogToFile(String recordName, String type) {
+        try {
+            Path logPath = Paths.get(LOGS_DIR, recordName + "-" + type + ".txt");
+            if (Files.exists(logPath)) return;
+
+            TrainingRecord record = trainingRecordRepository.findByRecordName(recordName).orElse(null);
+            if (record == null) return;
+
+            String podName = "train".equals(type) ? record.getTrainPodName() : record.getTestPodName();
+            String logContent = null;
+
+            if (podName != null && !podName.isEmpty()) {
+                logContent = getPodLogs(podName);
+                if (logContent != null && logContent.startsWith("Error")) logContent = null;
+            }
+
+            if (logContent == null || logContent.isEmpty()) {
+                String jobName = K8sClientService.sanitizeK8sName(recordName + "-" + type + "-job");
+                logContent = getJobLogs(jobName);
+                if (logContent != null && logContent.startsWith("Error")) logContent = null;
+            }
+
+            if (logContent != null && !logContent.isEmpty()) {
+                File dir = new File(LOGS_DIR);
+                if (!dir.exists()) dir.mkdirs();
+                Files.writeString(logPath, logContent, StandardCharsets.UTF_8);
+                if ("train".equals(type)) {
+                    record.setTrainLogFile(logPath.getFileName().toString());
+                } else {
+                    record.setTestLogFile(logPath.getFileName().toString());
+                }
+                trainingRecordRepository.save(record);
+                log.info("Saved {} log for {} to {}", type, recordName, logPath.getFileName());
+            }
+        } catch (Exception e) {
+            log.warn("Failed to save {} log for {}: {}", type, recordName, e.getMessage());
         }
     }
 

@@ -373,6 +373,7 @@ public class TrainingSchedulerService {
                             runningTasks.add(task);
                             trainingRecordRepository.findByRecordName(task.getRecordName()).ifPresent(r -> {
                                 r.setTrainStatus("RUNNING");
+                                r.setTargetNode(task.getTargetNode());
                                 trainingRecordRepository.save(r);
                             });
                             taskStatusMap.put(task.getRecordName(), "RUNNING");
@@ -450,6 +451,11 @@ public class TrainingSchedulerService {
             log.error("Training exception: {} - {}", recordName, e.getMessage());
             taskStatusMap.put(recordName, "FAILED");
         } finally {
+            try {
+                yoloService.saveLogToFile(recordName, "train");
+            } catch (Exception e) {
+                log.warn("Failed to save train log for {}: {}", recordName, e.getMessage());
+            }
             synchronized (this) {
                 runningTasks.remove(task);
                 taskStatusMap.remove(recordName);

@@ -59,15 +59,16 @@
           <el-card shadow="hover" v-for="ds in pagedDatasets" :key="ds.name" class="dataset-card">
             <div class="dataset-header">
               <div class="dataset-info"><span class="dataset-name">{{ ds.name }}</span><el-tag size="small" type="info">{{ ds.createdBy }}</el-tag><el-tag :type="ds.preprocessed?'success':'info'" size="small">{{ ds.preprocessed?'已预处理':'未预处理' }}</el-tag><el-button v-if="!ds.preprocessed" size="small" type="warning" :loading="processingStatus[ds.name]" @click="handlePreprocessDataset(ds.name)">预处理</el-button></div>
-              <div class="header-actions"><el-button size="small" type="primary" plain @click="addPendingRecord(ds.name)">+ 新增训练</el-button><el-button size="small" type="success" plain @click="showDistributedTrain(ds.name)">分布式训练</el-button><el-button size="small" type="danger" @click="handleDeleteDataset(ds.name)">删除数据集</el-button></div>
+              <div class="header-actions"><el-button size="small" type="primary" plain @click="addPendingRecord(ds.name)">+ 新增训练</el-button><el-button size="small" type="danger" @click="handleDeleteDataset(ds.name)">删除数据集</el-button></div>
             </div>
             <div class="dataset-records" style="overflow-x:auto">
-              <table class="records-table"><thead><tr><th class="col-priority">优先级</th><th class="col-epoch">Epochs</th><th class="col-imgsz">Imgsz</th><th class="col-tstatus">训练状态</th><th class="col-estatus">测试状态</th><th class="col-action">操作</th></tr></thead>
+              <table class="records-table"><thead><tr><th class="col-priority">优先级</th><th class="col-epoch">Epochs</th><th class="col-imgsz">Imgsz</th><th class="col-node">运行节点</th><th class="col-tstatus">训练状态</th><th class="col-estatus">测试状态</th><th class="col-action">操作</th></tr></thead>
                 <tbody>
                   <tr v-for="rec in getDatasetRecords(ds.name)" :key="rec.recordName">
                     <td><el-input-number v-if="isEditable(rec)" v-model="rec.priority" :min="1" :max="10" size="small" style="width:72px" /><span v-else class="param-fixed">{{ rec.priority||5 }}</span></td>
                     <td><span class="param-fixed">{{ rec.epochs }}</span></td>
                     <td><span class="param-fixed">{{ rec.imgsz }}</span></td>
+                    <td><el-tag v-if="rec.targetNode" size="small" type="primary">{{ rec.targetNode }}</el-tag><span v-else class="param-fixed" style="color:#909399">-</span></td>
                     <td><div class="status-cell"><el-progress v-if="rec.trainStatus==='RUNNING'" :percentage="rec.trainProgress||0" :stroke-width="18" :text-inside="true" :format="p=>p+'%'" style="width:110px" /><el-tag v-else :type="getStatusClass(rec.trainStatus)" size="small">{{ getStatusText(rec.trainStatus,'train') }}</el-tag></div></td>
                     <td><el-tag :type="getStatusClass(rec.testStatus)" size="small">{{ getStatusText(rec.testStatus,'test') }}</el-tag></td>
                     <td><div class="record-actions">
@@ -83,6 +84,7 @@
                     <td><el-input-number v-model="pending.priority" :min="1" :max="10" size="small" style="width:72px" /></td>
                     <td><el-input-number v-model="pending.epochs" :min="1" :max="1000" size="small" style="width:72px" /></td>
                     <td><el-input-number v-model="pending.imgsz" :min="32" :max="1280" :step="32" size="small" style="width:90px" /></td>
+                    <td><el-select v-model="pending.scheduleMode" size="small" style="width:90px" @change="v=>{if(v==='auto')pending.targetNode=''}"><el-option label="自动调度" value="auto" /><el-option label="指定节点" value="manual" /></el-select><el-select v-if="pending.scheduleMode==='manual'" v-model="pending.targetNode" size="small" style="width:90px;margin-left:4px" placeholder="选择节点"><el-option v-for="n in schedulableNodes" :key="n.nodeName" :label="n.nodeName" :value="n.nodeName" /></el-select></td>
                     <td><el-tag type="info" size="small">未训练</el-tag></td>
                     <td><el-tag type="info" size="small">未测试</el-tag></td>
                     <td><div class="record-actions"><el-button size="small" type="primary" :disabled="!ds.preprocessed" @click="handleTrainPending(ds.name,pending)">训练</el-button><el-button size="small" type="danger" @click="removePendingRecord(ds.name,pending.key)">删除</el-button></div></td>
@@ -205,30 +207,23 @@
                 <th class="col-nact">操作</th>
               </tr></thead>
               <tbody>
-                <tr v-for="row in workerNodesOnly" :key="row.nodeName">
+                <tr v-for="row in clusterNodes" :key="row.nodeName">
                   <td><span>{{ row.nodeName }}</span></td>
                   <td><span>{{ row.nodeIp }}</span></td>
-                  <td><span>{{ row.roles }}</span></td>
+                  <td><el-tag :type="row.roles&&row.roles.includes('control-plane')?'danger':'primary'" size="small">{{ row.roles&&row.roles.includes('control-plane')?'Master':'Worker' }}</el-tag></td>
                   <td><el-tag :type="row.ready?'success':'danger'" size="small">{{ row.ready?'就绪':'未就绪' }}</el-tag></td>
                   <td><el-tag :type="row.schedulable?'success':'warning'" size="small">{{ row.schedulable?'是':'否' }}</el-tag></td>
                   <td><span>{{ row.cpuAllocatable }}</span></td>
-                  <td><span>{{ row.memoryAllocatable }}</span></td>
+                  <td><span>{{ formatMemory(row.memoryAllocatable) }}</span></td>
                   <td><span>{{ row.gpuAllocatable }}</span></td>
                   <td><div class="node-concurrent"><el-input-number v-model="row._editMaxConcurrent" size="small" :min="0" :max="10" style="width:72px" /><el-button type="primary" size="small" @click="handleNodeMaxConcurrentChange(row)">保存</el-button></div></td>
-                  <td><div class="record-actions"><el-button v-if="row.schedulable" size="small" type="warning" @click="cordonNode(row.nodeName)">停止调度</el-button><el-button v-else size="small" type="success" @click="uncordonNode(row.nodeName)">恢复调度</el-button><el-button v-if="currentUser.role==='ROOT'" size="small" type="danger" @click="deleteNodeRecord(row.nodeName)">删除</el-button></div></td>
+                  <td><div class="record-actions"><el-button v-if="row.schedulable" size="small" type="warning" @click="cordonNode(row.nodeName)">停止调度</el-button><el-button v-else size="small" type="success" @click="uncordonNode(row.nodeName)">恢复调度</el-button></div></td>
                 </tr>
               </tbody>
             </table>
           </div>
         </el-card>
 
-        <el-card shadow="hover" style="margin-top:14px">
-          <template #header><span class="card-title">调度配置</span></template>
-          <div class="config-row">
-            <div class="cfg-item"><span class="cfg-label">调度模式</span><el-select v-model="schedulingMode" size="small" style="width:120px" @change="handleSchedulingModeChange"><el-option label="自动调度" value="auto" /><el-option label="手动指定" value="manual" /></el-select></div>
-            <div class="cfg-item"><span class="cfg-label">集群最大并发</span><span class="cfg-value">{{ totalMaxConcurrent }}</span><span class="cfg-hint">（各节点并发数之和）</span></div>
-          </div>
-        </el-card>
       </div>
     </main>
 
@@ -330,7 +325,7 @@ const getPendingRecords=(dataName)=>pendingRecords.value[dataName]||[]
 const isEditable=(rec)=>rec.trainStatus==='IDLE'&&(!rec.trainJobId||rec.trainJobId==='')
 const hasTrainLog=(rec)=>rec.trainStatus!=='IDLE'||rec.trainJobId
 const hasTestLog=(rec)=>rec.testStatus&&rec.testStatus!=='IDLE'
-const addPendingRecord=(dataName)=>{if(!pendingRecords.value[dataName])pendingRecords.value[dataName]=[];const k='pending-'+Date.now();pendingRecords.value[dataName].push({key:k,epochs:savedDefaultEpochs.value,imgsz:savedDefaultImgsz.value,priority:5})}
+const addPendingRecord=(dataName)=>{if(!pendingRecords.value[dataName])pendingRecords.value[dataName]=[];const k='pending-'+Date.now();pendingRecords.value[dataName].push({key:k,epochs:savedDefaultEpochs.value,imgsz:savedDefaultImgsz.value,priority:5,scheduleMode:'auto',targetNode:''})}
 const removePendingRecord=(dataName,key)=>{if(pendingRecords.value[dataName])pendingRecords.value[dataName]=pendingRecords.value[dataName].filter(r=>r.key!==key)}
 
 const switchToLogs=()=>{activePage.value='logs';loadOperationLogs()}
@@ -353,7 +348,7 @@ const handleLogin=async()=>{if(loginLoading.value)return;loginLoading.value=true
 
 const handleLogout=()=>{token.value='';currentUser.username='';currentUser.role='';isLoggedIn.value=false;localStorage.removeItem('token');localStorage.removeItem('username');localStorage.removeItem('role');stopAllWs();stopStatusRefresh();stopAllPreprocessTimers();datasetList.value=[];trainingRecords.value=[];userList.value=[];operationLogs.value=[];Object.keys(pendingRecords.value).forEach(k=>delete pendingRecords.value[k]);Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k]);Object.keys(processingStatus.value).forEach(k=>delete processingStatus.value[k]);Object.keys(testLoadingStatus.value).forEach(k=>delete testLoadingStatus.value[k]);currentPage.value=1;total.value=0;activePage.value='main'}
 
-const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz;if(r.data.schedulingMode)schedulingMode.value=r.data.schedulingMode}startStatusRefresh()}catch(e){}}
+const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs(),loadClusterNodes()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz;if(r.data.schedulingMode)schedulingMode.value=r.data.schedulingMode}startStatusRefresh()}catch(e){}}
 
 const loadTrainingRecords=async()=>{try{const oldRecords=[...trainingRecords.value];trainingRecords.value=(await api.value.get('/api/training-records')).data;checkStatusChanges(oldRecords,trainingRecords.value)}catch(e){}}
 const loadUsers=async()=>{try{const params={};if(userSearch.value)params.search=userSearch.value;if(userRoleFilter.value)params.role=userRoleFilter.value;userList.value=(await api.value.get('/api/users',{params})).data}catch(e){}}
@@ -376,7 +371,7 @@ const stopAllPreprocessTimers=()=>{Object.values(preprocessTimers.value).forEach
 
 const handleTrainRecord=async(rec)=>{const rn=rec.recordName;trainLogs.value[rn]='';try{const r=await api.value.post('/api/scheduler/add',{dataName:rec.dataName,epochs:rec.epochs,imgsz:rec.imgsz,priority:rec.priority||5});showMsg(r.data.message);await loadTrainingRecords();connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){delete trainLogs.value[rn];showMsg(e.response?.data?.message||'加入队列失败','error')}}
 
-const handleTrainPending=async(dataName,pending)=>{const rn=`${dataName}-e${pending.epochs}-i${pending.imgsz}`;trainLogs.value[rn]='';try{const r=await api.value.post('/api/scheduler/add',{dataName,epochs:pending.epochs,imgsz:pending.imgsz,priority:pending.priority});showMsg(r.data.message);removePendingRecord(dataName,pending.key);await loadTrainingRecords();connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){delete trainLogs.value[rn];showMsg(e.response?.data?.message||'加入队列失败','error')}}
+const handleTrainPending=async(dataName,pending)=>{const rn=`${dataName}-e${pending.epochs}-i${pending.imgsz}`;trainLogs.value[rn]='';try{const req={dataName,epochs:pending.epochs,imgsz:pending.imgsz,priority:pending.priority};if(pending.scheduleMode==='manual'&&pending.targetNode)req.targetNode=pending.targetNode;const r=await api.value.post('/api/scheduler/add',req);showMsg(r.data.message);removePendingRecord(dataName,pending.key);await loadTrainingRecords();connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){delete trainLogs.value[rn];showMsg(e.response?.data?.message||'加入队列失败','error')}}
 
 const handleTestRecord=async(rec)=>{testLogs.value[rec.recordName]='';testLoadingStatus.value[rec.recordName]=true;try{const r=await api.value.post('/api/test',{dataName:rec.dataName,imgsz:rec.imgsz,recordName:rec.recordName});showMsg('测试任务已启动');await loadTrainingRecords();connectLogWebSocket(rec.recordName,'test');startStatusRefresh()}catch(e){testLogs.value[rec.recordName]=`错误: ${e.message}\n`;testLoadingStatus.value[rec.recordName]=false}}
 
@@ -425,6 +420,7 @@ const handleSizeChange=v=>{pageSize.value=v;currentPage.value=1}
 const handleCurrentChange=v=>{currentPage.value=v}
 const getStatusClass=s=>{if(s==='RUNNING')return'warning';if(s==='QUEUED')return'primary';if(s==='COMPLETED')return'success';if(s==='FAILED')return'danger';return'info'}
 const getStatusText=(s,t)=>{const p=t==='train'?'训练':'测试';if(s==='RUNNING')return p+'中';if(s==='QUEUED')return'排队中';if(s==='COMPLETED')return'已完成';if(s==='FAILED')return'失败';return t==='train'?'未训练':'未测试'}
+const formatMemory=v=>{if(!v)return'-';const n=parseInt(v);if(isNaN(n))return v;if(n>=1073741824)return(n/1073741824).toFixed(1)+'GB';if(n>=1048576)return(n/1048576).toFixed(0)+'MB';if(n>=1024)return(n/1024).toFixed(0)+'KB';return n+'B'}
 
 const setLogRef=(n,t,el)=>{if(el)logRefs.value[`${n}-${t}`]=el}
 const autoScroll=(n,t)=>{nextTick(()=>{const el=logRefs.value[`${n}-${t}`];if(el){const distanceToBottom=el.scrollHeight-el.scrollTop-el.clientHeight;if(distanceToBottom<=100)el.scrollTop=el.scrollHeight}})}
@@ -486,7 +482,7 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 .records-table{width:100%;border-collapse:collapse;font-size:13px;table-layout:auto}
 .records-table th{background:#f5f7fa;padding:7px 4px;text-align:center;font-weight:600;color:#606266;border:1px solid #ebeef5;white-space:nowrap}
 .records-table td{padding:6px 4px;text-align:center;vertical-align:middle;border:1px solid #ebeef5}
-.col-priority{width:90px}.col-epoch{width:80px}.col-imgsz{width:90px}.col-tstatus{width:140px}.col-estatus{width:100px}
+.col-priority{width:90px}.col-epoch{width:80px}.col-imgsz{width:90px}.col-node{width:200px}.col-tstatus{width:140px}.col-estatus{width:100px}
 .col-nname{width:120px}.col-nip{width:130px}.col-nrole{width:80px}.col-nstatus{width:70px}.col-nsched{width:65px}.col-ncpu{width:55px}.col-nmem{width:85px}.col-ngpu{width:55px}.col-nconc{width:170px}.col-nact{width:190px}
 .col-luser{width:100px}.col-laction{width:140px}.col-ltarget{width:150px}.col-ldetail{width:200px}.col-ltime{width:170px}
 .col-uuser{width:130px}.col-urole{width:100px}.col-utime{width:170px}.col-uact{width:200px}
@@ -494,7 +490,7 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 .record-actions{display:flex;gap:3px;justify-content:center;flex-wrap:wrap}
 .pagination-container{display:flex;justify-content:center;margin-top:16px}
 
-.logs-section{margin-bottom:16px}.log-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(480px,100%),1fr));gap:14px}
+.logs-section{margin-bottom:16px}.log-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 .log-item{border:1px solid #dcdfe6;border-radius:8px;overflow:hidden}
 .log-header{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;background:#f5f7fa;border-bottom:1px solid #dcdfe6}
 .log-container{max-height:350px;overflow-y:auto;padding:10px 14px;background:#fff}
@@ -521,6 +517,6 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 :deep(.el-card){border-radius:12px;border:none}:deep(.el-card__header){padding:12px 18px;border-bottom:1px solid #ebeef5}:deep(.el-card__body){padding:14px 18px}
 :deep(.el-table){font-size:13px}:deep(.el-table th.el-table__cell){background-color:#f5f7fa!important;text-align:center!important}:deep(.el-dialog){border-radius:12px}
 
-@media(max-width:900px){.top-section{flex-direction:column}.upload-card,.config-card{flex:auto;min-width:100%}.cluster-overview .overview-card{min-width:45%}.filter-row{gap:8px}}
+@media(max-width:900px){.top-section{flex-direction:column}.upload-card,.config-card{flex:auto;min-width:100%}.cluster-overview .overview-card{min-width:45%}.filter-row{gap:8px}.log-grid{grid-template-columns:1fr}}
 @media(max-width:700px){.sidebar{width:60px}.sidebar-logo .logo-text,.nav-item span,.btn-label{display:none}.sidebar-logo{justify-content:center;padding:16px 8px}.nav-item{justify-content:center;padding:14px 8px}.sidebar-footer{padding:8px 4px;overflow:hidden}.user-badge{justify-content:center}.user-badge .user-name{display:none}.footer-actions .el-button{padding:4px 6px;min-width:40px;display:inline-flex;justify-content:center}.main-content{margin-left:60px;padding:10px}.log-grid{grid-template-columns:1fr}.header-actions{flex-wrap:wrap}.records-table{font-size:12px}.records-table td,.records-table th{padding:4px 2px}}
 </style>
