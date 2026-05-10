@@ -25,8 +25,9 @@
       </nav>
       <div class="sidebar-footer">
         <div class="user-badge"><el-tag :type="currentUser.role==='ROOT'?'danger':currentUser.role==='ADMIN'?'warning':'info'" size="small">{{ currentUser.role }}</el-tag><span class="user-name">{{ currentUser.username }}</span></div>
-        <div class="user-badge"><el-button size="small" @click="showChangePasswordDialog=true">更改密码</el-button></div>
-        <div class="footer-actions"><el-button v-if="currentUser.role==='ROOT'" size="small" type="danger" plain @click="handleCleanup">清空</el-button><el-button size="small" type="danger" @click="handleLogout">退出</el-button></div>
+        <div class="user-badge"><el-button size="small" @click="showChangePasswordDialog=true"><el-icon><Lock /></el-icon><span class="btn-label">更改密码</span></el-button></div>
+        <div class="user-badge"><el-button v-if="currentUser.role==='ROOT'" size="small" type="danger" plain @click="handleCleanup"><el-icon><Delete /></el-icon><span class="btn-label">清空数据集</span></el-button></div>
+        <div class="user-badge"><el-button size="small" type="danger" @click="handleLogout"><el-icon><SwitchButton /></el-icon><span class="btn-label">退出系统</span></el-button></div>
       </div>
     </aside>
 
@@ -123,9 +124,26 @@
           </div>
         </el-card>
         <el-card shadow="hover" style="margin-top:14px">
-          <el-table :data="pagedLogList" stripe size="small" class="fixed-table" max-height="600" :default-sort="{prop:'createdAt',order:'descending'}">
-            <el-table-column prop="username" label="用户" width="100" /><el-table-column prop="action" label="操作" width="140"><template #default="{row}"><el-tag :type="getActionTagType(row.action)" size="small">{{ row.action }}</el-tag></template></el-table-column><el-table-column prop="target" label="目标" min-width="140" show-overflow-tooltip /><el-table-column prop="detail" label="详情" min-width="200" show-overflow-tooltip /><el-table-column prop="createdAt" label="时间" width="170" sortable />
-          </el-table>
+          <div style="overflow-x:auto">
+            <table class="records-table">
+              <thead><tr>
+                <th class="col-luser">用户</th>
+                <th class="col-laction">操作</th>
+                <th class="col-ltarget">目标</th>
+                <th class="col-ldetail">详情</th>
+                <th class="col-ltime">时间 ▼</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="row in pagedLogList" :key="row.id">
+                  <td><span>{{ row.username }}</span></td>
+                  <td><el-tag :type="getActionTagType(row.action)" size="small">{{ row.action }}</el-tag></td>
+                  <td><span>{{ row.target }}</span></td>
+                  <td><span>{{ row.detail }}</span></td>
+                  <td><span class="param-fixed">{{ row.createdAt }}</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
           <div class="pagination-container" style="margin-top:12px"><el-pagination v-model:current-page="logPage" :page-size="logPageSize" :total="filteredLogs.length" :page-sizes="[20,50,100]" layout="total,sizes,prev,pager,next" @size-change="logPageSize=$event;logPage=1" @current-change="logPage=$event" small /></div>
         </el-card>
       </div>
@@ -140,9 +158,24 @@
           </div>
         </el-card>
         <el-card shadow="hover" style="margin-top:14px">
-          <el-table :data="filteredUserList" stripe size="small" class="fixed-table">
-            <el-table-column prop="username" label="用户名" min-width="120" /><el-table-column prop="role" label="角色" min-width="100" align="center"><template #default="s"><el-tag :type="s.row.role==='ROOT'?'danger':s.row.role==='ADMIN'?'warning':'info'" size="small">{{ s.row.role }}</el-tag></template></el-table-column><el-table-column prop="createdAt" label="创建时间" min-width="170" /><el-table-column label="操作" min-width="180" align="center"><template #default="s"><el-button v-if="canEditUserRole(s.row)" size="small" @click="showRoleDialog(s.row)">修改角色</el-button><el-button v-if="s.row.role!=='ROOT'&&currentUser.role==='ROOT'" size="small" type="danger" @click="handleDeleteUser(s.row)">删除</el-button></template></el-table-column>
-          </el-table>
+          <div style="overflow-x:auto">
+            <table class="records-table">
+              <thead><tr>
+                <th class="col-uuser">用户名</th>
+                <th class="col-urole">角色</th>
+                <th class="col-utime">创建时间</th>
+                <th class="col-uact">操作</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="row in filteredUserList" :key="row.id">
+                  <td><span>{{ row.username }}</span></td>
+                  <td><el-tag :type="row.role==='ROOT'?'danger':row.role==='ADMIN'?'warning':'info'" size="small">{{ row.role }}</el-tag></td>
+                  <td><span>{{ row.createdAt }}</span></td>
+                  <td><div class="record-actions"><el-button v-if="canEditUserRole(row)" size="small" @click="showRoleDialog(row)">修改角色</el-button><el-button v-if="row.role!=='ROOT'&&currentUser.role==='ROOT'" size="small" type="danger" @click="handleDeleteUser(row)">删除</el-button></div></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </el-card>
       </div>
 
@@ -157,18 +190,36 @@
         </div>
 
         <el-card shadow="hover" style="margin-top:14px">
-          <el-table :data="clusterNodes" stripe size="small" class="fixed-table" max-height="500">
-            <el-table-column prop="nodeName" label="节点名称" min-width="120" show-overflow-tooltip />
-            <el-table-column prop="nodeIp" label="IP地址" width="130" />
-            <el-table-column prop="roles" label="角色" width="100" />
-            <el-table-column label="状态" width="80" align="center"><template #default="{row}"><el-tag :type="row.ready?'success':'danger'" size="small">{{ row.ready?'就绪':'未就绪' }}</el-tag></template></el-table-column>
-            <el-table-column label="可调度" width="70" align="center"><template #default="{row}"><el-tag :type="row.schedulable?'success':'warning'" size="small">{{ row.schedulable?'是':'否' }}</el-tag></template></el-table-column>
-            <el-table-column prop="cpuAllocatable" label="CPU" width="80" />
-            <el-table-column prop="memoryAllocatable" label="内存" width="100" />
-            <el-table-column prop="gpuAllocatable" label="GPU" width="80" />
-            <el-table-column label="并发数" width="130" align="center"><template #default="{row}"><div class="node-concurrent"><el-input-number v-model="row._editMaxConcurrent" size="small" :min="0" :max="10" style="width:80px" /><el-button type="primary" size="small" @click="handleNodeMaxConcurrentChange(row)">保存</el-button></div></template></el-table-column>
-            <el-table-column label="操作" width="140" align="center"><template #default="{row}"><el-button v-if="row.schedulable" size="small" type="warning" @click="cordonNode(row.nodeName)">停止调度</el-button><el-button v-else size="small" type="success" @click="uncordonNode(row.nodeName)">恢复调度</el-button><el-button v-if="currentUser.role==='ROOT'" size="small" type="danger" @click="deleteNodeRecord(row.nodeName)">删除</el-button></template></el-table-column>
-          </el-table>
+          <div style="overflow-x:auto">
+            <table class="records-table">
+              <thead><tr>
+                <th class="col-nname">节点名称</th>
+                <th class="col-nip">IP地址</th>
+                <th class="col-nrole">角色</th>
+                <th class="col-nstatus">状态</th>
+                <th class="col-nsched">可调度</th>
+                <th class="col-ncpu">CPU</th>
+                <th class="col-nmem">内存</th>
+                <th class="col-ngpu">GPU</th>
+                <th class="col-nconc">并发数</th>
+                <th class="col-nact">操作</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="row in workerNodesOnly" :key="row.nodeName">
+                  <td><span>{{ row.nodeName }}</span></td>
+                  <td><span>{{ row.nodeIp }}</span></td>
+                  <td><span>{{ row.roles }}</span></td>
+                  <td><el-tag :type="row.ready?'success':'danger'" size="small">{{ row.ready?'就绪':'未就绪' }}</el-tag></td>
+                  <td><el-tag :type="row.schedulable?'success':'warning'" size="small">{{ row.schedulable?'是':'否' }}</el-tag></td>
+                  <td><span>{{ row.cpuAllocatable }}</span></td>
+                  <td><span>{{ row.memoryAllocatable }}</span></td>
+                  <td><span>{{ row.gpuAllocatable }}</span></td>
+                  <td><div class="node-concurrent"><el-input-number v-model="row._editMaxConcurrent" size="small" :min="0" :max="10" style="width:72px" /><el-button type="primary" size="small" @click="handleNodeMaxConcurrentChange(row)">保存</el-button></div></td>
+                  <td><div class="record-actions"><el-button v-if="row.schedulable" size="small" type="warning" @click="cordonNode(row.nodeName)">停止调度</el-button><el-button v-else size="small" type="success" @click="uncordonNode(row.nodeName)">恢复调度</el-button><el-button v-if="currentUser.role==='ROOT'" size="small" type="danger" @click="deleteNodeRecord(row.nodeName)">删除</el-button></div></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </el-card>
 
         <el-card shadow="hover" style="margin-top:14px">
@@ -225,7 +276,7 @@
 <script setup>
 import { ref, reactive, onMounted, nextTick, computed, watch, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { UploadFilled, Monitor, Document, UserFilled, Coin } from '@element-plus/icons-vue'
+import { UploadFilled, Monitor, Document, UserFilled, Coin, Lock, Delete, SwitchButton } from '@element-plus/icons-vue'
 import axios from 'axios'
 
 const isLoggedIn=ref(false)
@@ -258,6 +309,7 @@ const clusterNodes=ref([]),clusterOverview=reactive({totalNodes:0,readyNodes:0,g
 const showDistributedTrainDialog=ref(false),distributedTrainForm=reactive({dataName:'',epochs:2,imgsz:640,priority:5,targetNode:'',gpuType:'',gpuCount:1})
 const schedulableNodes=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable))
 const totalMaxConcurrent=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+(n.maxConcurrentTasks||1),0))
+const workerNodesOnly=computed(()=>clusterNodes.value.filter(n=>!n.roles?.includes('control-plane')&&!n.roles?.includes('master')))
 
 const wsConnections=new Map()
 let statusRefreshTimer=null
@@ -268,7 +320,7 @@ const api=computed(()=>axios.create({headers:{Authorization:`Bearer ${token.valu
 const showMsg=(msg,type='success')=>ElMessage({message:msg,type,duration:3000,center:true})
 
 const filteredLogs=computed(()=>{let list=[...operationLogs.value];if(logFilter.username){const kw=logFilter.username.toLowerCase();list=list.filter(l=>l.username&&l.username.toLowerCase().includes(kw))}if(logFilter.action){list=list.filter(l=>l.action===logFilter.action)}if(logFilter.startTime){try{const s=new Date(logFilter.startTime);list=list.filter(l=>l.createdAt&&new Date(l.createdAt)>=s)}catch(e){}}if(logFilter.endTime){try{const e=new Date(logFilter.endTime);list=list.filter(l=>l.createdAt&&new Date(l.createdAt)<=e)}catch(e){}}return list})
-const pagedLogList=computed(()=>{const s=(logPage.value-1)*logPageSize.value;return filteredLogs.value.slice(s,s+logPageSize.value)})
+const pagedLogList=computed(()=>{const sorted=[...filteredLogs.value].sort((a,b)=>new Date(b.createdAt).getTime()-new Date(a.createdAt).getTime());const s=(logPage.value-1)*logPageSize.value;return sorted.slice(s,s+logPageSize.value)})
 const filteredUserList=computed(()=>{let list=[...userList.value];if(userSearch.value){const kw=userSearch.value.toLowerCase();list=list.filter(u=>u.username.toLowerCase().includes(kw))}if(userRoleFilter.value){list=list.filter(u=>u.role===userRoleFilter.value)}return list})
 
 const handleFileUpload=async(file)=>{const dataName=file.name.replace(/\.zip$/i,'');currentStep.value='addDataset';try{const formData=new FormData();formData.append('file',file);formData.append('dataName',dataName);const r=await api.value.post('/api/datasets/upload',formData,{headers:{'Content-Type':'multipart/form-data'},timeout:300000});showMsg(`数据集 ${dataName} 上传成功`);await refreshDatasets();await loadTrainingRecords()}catch(e){showMsg(`上传失败: ${e.response?.data?.message||e.message}`,'error')}finally{currentStep.value='';return false}}
@@ -403,9 +455,9 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 .nav-item{display:flex;align-items:center;gap:10px;padding:12px 20px;cursor:pointer;transition:all .2s;color:rgba(255,255,255,.65);font-size:14px;border-left:3px solid transparent}
 .nav-item:hover{background:rgba(255,255,255,.08);color:#fff}
 .nav-item.active{background:rgba(64,158,255,.15);color:#409eff;border-left-color:#409eff}
-.sidebar-footer{padding:14px 16px;border-top:1px solid rgba(255,255,255,.1)}
+.sidebar-footer{padding:14px 10px;border-top:1px solid rgba(255,255,255,.1)}
 .user-badge{display:flex;align-items:center;gap:6px;margin-bottom:8px}.user-name{font-size:13px;color:rgba(255,255,255,.8)}
-.footer-actions{display:flex;gap:6px}
+.footer-actions{display:flex;flex-direction:column;gap:4px;align-items:flex-start}
 
 .main-content{margin-left:clamp(160px,15vw,200px);flex:1;padding:clamp(12px,2vw,28px);position:relative;z-index:1;min-height:100vh;box-sizing:border-box}
 .page-header{margin-bottom:18px}.page-header h2{margin:0;font-size:clamp(16px,2vw,20px);color:#303133;font-weight:700}
@@ -435,6 +487,9 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 .records-table th{background:#f5f7fa;padding:7px 4px;text-align:center;font-weight:600;color:#606266;border:1px solid #ebeef5;white-space:nowrap}
 .records-table td{padding:6px 4px;text-align:center;vertical-align:middle;border:1px solid #ebeef5}
 .col-priority{width:90px}.col-epoch{width:80px}.col-imgsz{width:90px}.col-tstatus{width:140px}.col-estatus{width:100px}
+.col-nname{width:120px}.col-nip{width:130px}.col-nrole{width:80px}.col-nstatus{width:70px}.col-nsched{width:65px}.col-ncpu{width:55px}.col-nmem{width:85px}.col-ngpu{width:55px}.col-nconc{width:170px}.col-nact{width:190px}
+.col-luser{width:100px}.col-laction{width:140px}.col-ltarget{width:150px}.col-ldetail{width:200px}.col-ltime{width:170px}
+.col-uuser{width:130px}.col-urole{width:100px}.col-utime{width:170px}.col-uact{width:200px}
 .param-fixed{font-weight:600;color:#303133}.status-cell{display:flex;flex-direction:column;align-items:center;gap:2px}
 .record-actions{display:flex;gap:3px;justify-content:center;flex-wrap:wrap}
 .pagination-container{display:flex;justify-content:center;margin-top:16px}
@@ -451,6 +506,7 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 
 .save-path-row{display:flex;gap:8px;width:100%}.save-path-row .el-input{flex:1}
 .fixed-table{width:100%}
+.responsive-table{width:100%;table-layout:auto}
 
 .cluster-overview{display:flex;gap:12px;flex-wrap:wrap}
 .overview-card{flex:1;min-width:min(120px,45%);text-align:center;padding:8px 0}
@@ -466,5 +522,5 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 :deep(.el-table){font-size:13px}:deep(.el-table th.el-table__cell){background-color:#f5f7fa!important;text-align:center!important}:deep(.el-dialog){border-radius:12px}
 
 @media(max-width:900px){.top-section{flex-direction:column}.upload-card,.config-card{flex:auto;min-width:100%}.cluster-overview .overview-card{min-width:45%}.filter-row{gap:8px}}
-@media(max-width:700px){.sidebar{width:60px}.sidebar-logo .logo-text,.nav-item span,.user-badge .user-name,.footer-actions .el-button span{display:none}.sidebar-logo{justify-content:center;padding:16px 8px}.nav-item{justify-content:center;padding:14px 8px}.main-content{margin-left:60px;padding:10px}.log-grid{grid-template-columns:1fr}.header-actions{flex-wrap:wrap}}
+@media(max-width:700px){.sidebar{width:60px}.sidebar-logo .logo-text,.nav-item span,.btn-label{display:none}.sidebar-logo{justify-content:center;padding:16px 8px}.nav-item{justify-content:center;padding:14px 8px}.sidebar-footer{padding:8px 4px;overflow:hidden}.user-badge{justify-content:center}.user-badge .user-name{display:none}.footer-actions .el-button{padding:4px 6px;min-width:40px;display:inline-flex;justify-content:center}.main-content{margin-left:60px;padding:10px}.log-grid{grid-template-columns:1fr}.header-actions{flex-wrap:wrap}.records-table{font-size:12px}.records-table td,.records-table th{padding:4px 2px}}
 </style>

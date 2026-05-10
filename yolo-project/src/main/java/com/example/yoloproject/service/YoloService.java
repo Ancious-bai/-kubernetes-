@@ -704,6 +704,14 @@ public class YoloService {
                 logBuilder.append("Cleaned up training task resources: ").append(recName).append("\n");
             }
 
+            try {
+                k8sClientService.deleteJob(dataName + "-preprocess-job");
+                k8sClientService.deletePodsByJob(dataName + "-preprocess-job");
+                logBuilder.append("Cleaned up preprocess K8s resources\n");
+            } catch (Exception e) {
+                log.debug("Preprocess K8s cleanup: {}", e.getMessage());
+            }
+
             String processedDir = PROJECT_ROOT + dataName + "_processed";
             try {
                 deleteDirectory(new File(processedDir));
@@ -868,9 +876,26 @@ public class YoloService {
             }
             trainingRecordRepository.deleteAll();
 
+            for (Dataset ds : allDatasets) {
+                try {
+                    k8sClientService.deleteJob(ds.getName() + "-preprocess-job");
+                    k8sClientService.deletePodsByJob(ds.getName() + "-preprocess-job");
+                } catch (Exception ignored) {}
+                try {
+                    deleteDirectory(new File(PROJECT_ROOT + ds.getName() + "_processed"));
+                    deleteDirectory(new File(PROJECT_ROOT + ds.getName()));
+                } catch (Exception ignored) {}
+            }
+
             File runsDir = new File(PROJECT_ROOT + "runs/detect");
             if (runsDir.exists()) {
                 deleteDirectory(runsDir);
+            }
+
+            File logsDir = new File(LOGS_DIR);
+            if (logsDir.exists()) {
+                deleteDirectory(logsDir);
+                logsDir.mkdirs();
             }
 
             jobStatusMap.clear();
