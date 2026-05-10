@@ -737,6 +737,19 @@ public class K8sClientService {
         return null;
     }
 
+    public int getTrainingPodCountOnNode(String nodeName) {
+        try {
+            V1PodList pods = coreApi.listPodForAllNamespaces()
+                    .fieldSelector("spec.nodeName=" + nodeName + ",status.phase=Running")
+                    .labelSelector("app=yolo-training")
+                    .execute();
+            return pods != null && pods.getItems() != null ? pods.getItems().size() : 0;
+        } catch (ApiException e) {
+            log.error("Failed to get training pod count for node {}: {}", nodeName, e.getMessage());
+            return 0;
+        }
+    }
+
     public void cordonNode(String nodeName, boolean unschedulable) throws ApiException {
         String patchJson = "{\"spec\":{\"unschedulable\":" + unschedulable + "}}";
         V1Patch patch = new V1Patch(patchJson);

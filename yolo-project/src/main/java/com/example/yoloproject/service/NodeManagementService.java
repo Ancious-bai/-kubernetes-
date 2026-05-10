@@ -31,9 +31,8 @@ public class NodeManagementService {
         if (k8sClientService.isReady()) {
             for (NodeInfo node : nodes) {
                 try {
-                    Map<String, Object> allocated = k8sClientService.getNodeAllocatedResources(node.getNodeName());
-                    int runningPods = (int) allocated.getOrDefault("runningPods", 0);
-                    node.setCurrentTasks(runningPods);
+                    int trainingPods = k8sClientService.getTrainingPodCountOnNode(node.getNodeName());
+                    node.setCurrentTasks(trainingPods);
                 } catch (Exception e) {
                     node.setCurrentTasks(0);
                 }

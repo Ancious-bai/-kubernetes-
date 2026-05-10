@@ -52,6 +52,7 @@ public class TrainingSchedulerService {
 
     private final PriorityQueue<TrainingTask> taskQueue = new PriorityQueue<>(
         Comparator.comparingInt(TrainingTask::getPriority)
+            .thenComparingLong(TrainingTask::getSubmitTime)
     );
 
     private final Set<TrainingTask> runningTasks = ConcurrentHashMap.newKeySet();
@@ -522,6 +523,7 @@ public class TrainingSchedulerService {
         private String targetNode;
         private final Map<String, String> nodeSelector;
         private final Map<String, String> gpuResources;
+        private final long submitTime;
 
         public TrainingTask(String dataName, int priority, int epochs, int imgsz, String recordName,
                             String targetNode, Map<String, String> nodeSelector, Map<String, String> gpuResources) {
@@ -533,6 +535,7 @@ public class TrainingSchedulerService {
             this.targetNode = targetNode;
             this.nodeSelector = nodeSelector;
             this.gpuResources = gpuResources;
+            this.submitTime = System.currentTimeMillis();
         }
 
         public String getDataName() { return dataName; }
@@ -545,5 +548,6 @@ public class TrainingSchedulerService {
         public void setTargetNode(String targetNode) { this.targetNode = targetNode; }
         public Map<String, String> getNodeSelector() { return nodeSelector; }
         public Map<String, String> getGpuResources() { return gpuResources; }
+        public long getSubmitTime() { return submitTime; }
     }
 }

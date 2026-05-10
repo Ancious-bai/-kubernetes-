@@ -33,6 +33,11 @@ public class JwtAuthFilter implements Filter {
 
         String path = httpRequest.getRequestURI();
 
+        if ("OPTIONS".equalsIgnoreCase(httpRequest.getMethod())) {
+            chain.doFilter(request, response);
+            return;
+        }
+
         for (String publicPath : PUBLIC_PATHS) {
             if (pathMatcher.match(publicPath, path)) {
                 chain.doFilter(request, response);
