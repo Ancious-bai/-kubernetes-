@@ -416,7 +416,7 @@ public class K8sClientService {
         V1Container container = new V1Container();
         container.setName("yolo-container");
         container.setImage(imageName);
-        container.setImagePullPolicy("IfNotPresent");
+        container.setImagePullPolicy("Always");
         container.setWorkingDir("/app/workspace");
 
         String effectiveInputDir = inputDir;
@@ -511,7 +511,7 @@ public class K8sClientService {
         V1Container container = new V1Container();
         container.setName("yolo-container");
         container.setImage(imageName);
-        container.setImagePullPolicy("IfNotPresent");
+        container.setImagePullPolicy("Always");
 
         container.setWorkingDir("/app/workspace");
 
@@ -612,7 +612,7 @@ public class K8sClientService {
         V1Container container = new V1Container();
         container.setName("yolo-container");
         container.setImage(imageName);
-        container.setImagePullPolicy("IfNotPresent");
+        container.setImagePullPolicy("Always");
 
         container.setWorkingDir("/app/workspace");
 
