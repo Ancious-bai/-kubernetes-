@@ -452,7 +452,7 @@ public class TrainingSchedulerService {
             taskStatusMap.put(recordName, "FAILED");
         } finally {
             try {
-                yoloService.saveLogToFile(recordName, "train");
+                yoloService.persistLogByType(recordName, "train");
             } catch (Exception e) {
                 log.warn("Failed to save train log for {}: {}", recordName, e.getMessage());
             }

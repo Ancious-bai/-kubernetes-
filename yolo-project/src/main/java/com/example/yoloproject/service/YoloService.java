@@ -649,7 +649,7 @@ public class YoloService {
                 }
                 trainingRecordRepository.save(r);
             });
-            saveLogToFile(recordName, "train");
+            persistLogByType(recordName, "train");
         } catch (Exception e) {
             log.error("Failed to set train final status: {} -> {}", recordName, status, e);
         }
@@ -664,7 +664,7 @@ public class YoloService {
                 }
                 trainingRecordRepository.save(r);
             });
-            saveLogToFile(recordName, "test");
+            persistLogByType(recordName, "test");
         } catch (Exception e) {
             log.error("Failed to set test final status: {} -> {}", recordName, status, e);
         }
@@ -930,7 +930,7 @@ public class YoloService {
         }
     }
 
-    public void saveLogToFile(String recordName, String type) {
+    public void persistLogByType(String recordName, String type) {
         try {
             Path logPath = Paths.get(LOGS_DIR, recordName + "-" + type + ".txt");
             if (Files.exists(logPath)) return;
