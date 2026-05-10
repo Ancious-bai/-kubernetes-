@@ -715,7 +715,19 @@ public class YoloService {
             }
 
             final String asyncDataName = dataName;
+            final List<String> asyncRecordNames = new ArrayList<>(recordNames);
             executorService.submit(() -> {
+                for (String recName : asyncRecordNames) {
+                    try {
+                        forceDeleteDirectory(new File(PROJECT_ROOT + "runs/detect/" + recName + "_train"));
+                        forceDeleteDirectory(new File(PROJECT_ROOT + "runs/detect/" + recName + "_test"));
+                        new File(LOGS_DIR, recName + "-train.txt").delete();
+                        new File(LOGS_DIR, recName + "-test.txt").delete();
+                    } catch (Exception e) {
+                        log.warn("Failed to cleanup runs/logs for {}: {}", recName, e.getMessage());
+                    }
+                }
+
                 String processedDir = PROJECT_ROOT + asyncDataName + "_processed";
                 try {
                     forceDeleteDirectory(new File(processedDir));
@@ -766,7 +778,7 @@ public class YoloService {
         executorService.submit(() -> {
             try {
                 forceDeleteDirectory(new File(PROJECT_ROOT + "runs/detect/" + asyncRecordName + "_train"));
-                forceDeleteDirectory(new File(PROJECT_ROOT + "runs/detect/" + asyncRecordName + "_train_test"));
+                forceDeleteDirectory(new File(PROJECT_ROOT + "runs/detect/" + asyncRecordName + "_test"));
             } catch (Exception e) {
                 log.warn("Async runs directory cleanup for {}: {}", asyncRecordName, e.getMessage());
             }

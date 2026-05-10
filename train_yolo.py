@@ -36,7 +36,8 @@ def main():
         site = os.path.join(data_root, site)
     data_yaml = f"{site}/data.yaml"
 
-    train_name = args.name if args.name else f"{site}_train"
+    base_name = args.name if args.name else site
+    train_name = base_name + "_train"
 
     print(f"正在训练{site}样本集")
     print(f"训练参数: epochs={args.epochs}, imgsz={args.imgsz}, name={train_name}")

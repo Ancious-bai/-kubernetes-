@@ -535,7 +535,7 @@ public class K8sClientService {
 
         List<String> command = Arrays.asList("python3", "/app/workspace/train_yolo.py",
                 "--site", dataName + "_processed",
-                "--name", recordName + "_train",
+                "--name", recordName,
                 "--epochs", String.valueOf(epochs),
                 "--imgsz", String.valueOf(imgsz));
         container.setCommand(command);
@@ -639,7 +639,7 @@ public class K8sClientService {
 
         List<String> command = Arrays.asList("python3", "/app/workspace/test_yolo.py",
                 "--site", dataName + "_processed",
-                "--name", recordName + "_train",
+                "--name", recordName,
                 "--imgsz", String.valueOf(imgsz));
         container.setCommand(command);
 
