@@ -8,6 +8,7 @@ import com.example.yoloproject.repository.DatasetRepository;
 import com.example.yoloproject.repository.OperationLogRepository;
 import com.example.yoloproject.repository.TrainingRecordRepository;
 import com.example.yoloproject.service.AuthService;
+import com.example.yoloproject.service.K8sClientService;
 import com.example.yoloproject.service.YoloService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -199,9 +200,14 @@ public class YoloController {
         String dataName;
         String effectivePath;
 
-        if (inputDir.startsWith("/") || inputDir.startsWith("/app/data")) {
+        if (inputDir.startsWith("/app/data")) {
             effectivePath = inputDir;
             dataName = new File(inputDir).getName();
+        } else if (inputDir.startsWith("/")) {
+            Map<String, String> response = new HashMap<>();
+            response.put("message", "数据集路径必须在 /app/data 目录下");
+            response.put("status", "error");
+            return ResponseEntity.badRequest().body(response);
         } else {
             String workspaceDir = projectRoot.replace("\\", "/");
             if (!workspaceDir.endsWith("/")) workspaceDir += "/";
@@ -244,9 +250,12 @@ public class YoloController {
             String dataName;
             String effectivePath;
 
-            if (inputDir.startsWith("/") || inputDir.startsWith("/app/data")) {
+            if (inputDir.startsWith("/app/data")) {
                 effectivePath = inputDir;
                 dataName = new File(inputDir).getName();
+            } else if (inputDir.startsWith("/")) {
+                skipped++;
+                continue;
             } else {
                 effectivePath = workspaceDir + inputDir;
                 dataName = inputDir;
@@ -291,10 +300,25 @@ public class YoloController {
     @GetMapping("/status/{jobId}")
     public ResponseEntity<JobStatus> getStatus(@PathVariable String jobId) {
         JobStatus status = yoloService.getJobStatus(jobId);
-        if (status == null) {
-            return ResponseEntity.notFound().build();
+        if (status != null) {
+            return ResponseEntity.ok(status);
         }
-        return ResponseEntity.ok(status);
+
+        List<TrainingRecord> records = trainingRecordRepository.findAll();
+        for (TrainingRecord record : records) {
+            if (jobId.equals(record.getTrainJobId()) || jobId.equals(record.getTestJobId())) {
+                JobStatus fallback = new JobStatus();
+                fallback.setJobId(jobId);
+                boolean isTrain = jobId.equals(record.getTrainJobId());
+                String recStatus = isTrain ? record.getTrainStatus() : record.getTestStatus();
+                fallback.setStatus(recStatus != null ? recStatus : "UNKNOWN");
+                fallback.setProgress(record.getTrainProgress() != null ? record.getTrainProgress() : 0);
+                fallback.setPodName(isTrain ? record.getTrainPodName() : record.getTestPodName());
+                return ResponseEntity.ok(fallback);
+            }
+        }
+
+        return ResponseEntity.notFound().build();
     }
 
     @GetMapping("/pods")
@@ -345,7 +369,7 @@ public class YoloController {
         String result = yoloService.saveModel(dataName, modelType, savePath, recordName);
 
         Map<String, String> response = new HashMap<>();
-        if (!result.startsWith("错误") && !result.startsWith("保存失败")) {
+        if (result != null && !result.startsWith("Error:") && !result.startsWith("Save failed:") && !result.contains("does not exist")) {
             authService.logOperation(null, username, "SAVE_MODEL", recordName != null ? recordName : dataName, "保存模型: " + modelType);
             response.put("message", "模型保存成功");
             response.put("path", result);
@@ -404,11 +428,12 @@ public class YoloController {
         String dataName = (String) request.get("dataName");
         int imgsz = request.get("imgsz") != null ? ((Number) request.get("imgsz")).intValue() : 640;
         String recordName = (String) request.get("recordName");
+        String targetNode = (String) request.get("targetNode");
         String username = (String) httpRequest.getAttribute("username");
         if (recordName == null || recordName.isEmpty()) {
             recordName = dataName + "-i" + imgsz;
         }
-        String jobId = yoloService.startTesting(dataName, imgsz, recordName);
+        String jobId = yoloService.startTesting(dataName, imgsz, recordName, targetNode);
 
         authService.logOperation(null, username, "TEST", recordName, "测试: imgsz=" + imgsz);
 
@@ -494,7 +519,7 @@ public class YoloController {
         }
 
         if (logContent.isEmpty()) {
-            String jobLog = yoloService.getJobLogs(recordName + "-train-job");
+            String jobLog = yoloService.getJobLogs(K8sClientService.sanitizeK8sName(recordName + "-train-job"));
             if (jobLog != null && !jobLog.isEmpty() && !jobLog.startsWith("Error:") && !jobLog.contains("failed to")) {
                 logContent = jobLog;
             }
@@ -553,7 +578,7 @@ public class YoloController {
         }
 
         if (logContent.isEmpty()) {
-            String jobLog = yoloService.getJobLogs(recordName + "-test-job");
+            String jobLog = yoloService.getJobLogs(K8sClientService.sanitizeK8sName(recordName + "-test-job"));
             if (jobLog != null && !jobLog.isEmpty() && !jobLog.startsWith("Error:") && !jobLog.contains("failed to")) {
                 logContent = jobLog;
             }

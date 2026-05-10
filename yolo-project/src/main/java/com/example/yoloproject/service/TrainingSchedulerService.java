@@ -5,6 +5,7 @@ import com.example.yoloproject.entity.SystemConfig;
 import com.example.yoloproject.entity.TrainingRecord;
 import com.example.yoloproject.repository.SystemConfigRepository;
 import com.example.yoloproject.repository.TrainingRecordRepository;
+import com.example.yoloproject.service.K8sClientService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,6 +20,9 @@ import java.util.stream.Collectors;
 public class TrainingSchedulerService {
 
     private static final Logger log = LoggerFactory.getLogger(TrainingSchedulerService.class);
+
+    @Autowired
+    private K8sClientService k8sClientService;
 
     @Autowired
     private SystemConfigRepository systemConfigRepository;
@@ -342,6 +346,7 @@ public class TrainingSchedulerService {
                         totalMax = getTotalMaxConcurrentTasks();
                     }
 
+                    boolean scheduledAny = false;
                     while (runningTasks.size() < totalMax && !taskQueue.isEmpty()) {
                         TrainingTask task = taskQueue.peek();
                         if (task == null) break;
@@ -354,10 +359,10 @@ public class TrainingSchedulerService {
                             int nodeRunning = getRunningTaskCountOnNode(targetNode);
                             canSchedule = nodeRunning < nodeMax;
                         } else {
-                            canSchedule = true;
                             NodeInfo selected = selectNodeForTask(task.getGpuResources());
                             if (selected != null) {
                                 task.setTargetNode(selected.getNodeName());
+                                canSchedule = true;
                             } else {
                                 canSchedule = false;
                             }
@@ -372,18 +377,22 @@ public class TrainingSchedulerService {
                             });
                             taskStatusMap.put(task.getRecordName(), "RUNNING");
                             workerExecutor.submit(() -> executeTask(task));
+                            scheduledAny = true;
                         } else {
                             break;
                         }
                     }
-                }
 
-                Thread.sleep(100);
+                    if (!scheduledAny && !taskQueue.isEmpty()) {
+                        wait(5000);
+                    }
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception e) {
                 log.error("Error in scheduler loop", e);
+                try { Thread.sleep(1000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
             }
         }
     }
@@ -396,14 +405,10 @@ public class TrainingSchedulerService {
                     recordName, task.getEpochs(), task.getImgsz(), task.getTargetNode());
 
             String jobId;
-            if (task.getTargetNode() != null || task.getGpuResources() != null) {
-                jobId = yoloService.startTrainingOnNode(
-                        dataName, task.getEpochs(), task.getImgsz(), recordName,
-                        task.getTargetNode(), task.getNodeSelector(), task.getGpuResources()
-                );
-            } else {
-                jobId = yoloService.startTraining(dataName, task.getEpochs(), task.getImgsz(), recordName);
-            }
+            jobId = yoloService.startTrainingOnNode(
+                    dataName, task.getEpochs(), task.getImgsz(), recordName,
+                    task.getTargetNode(), task.getNodeSelector(), task.getGpuResources()
+            );
 
             while (!Thread.currentThread().isInterrupted()) {
                 if (!trainingRecordRepository.existsByRecordName(recordName)) {
@@ -465,10 +470,23 @@ public class TrainingSchedulerService {
 
         runningTasks.removeIf(task -> {
             if (task.getRecordName().equals(recordName)) {
-                log.info("Running task marked for cancellation: {}", recordName);
+                log.info("Running task cancelled, deleting K8s jobs: {}", recordName);
+                try {
+                    k8sClientService.deleteJob(K8sClientService.sanitizeK8sName(recordName + "-train-job"));
+                    k8sClientService.deletePodsByJob(K8sClientService.sanitizeK8sName(recordName + "-train-job"));
+                } catch (Exception e) {
+                    log.warn("Failed to delete train job for cancelled task {}: {}", recordName, e.getMessage());
+                }
                 return true;
             }
             return false;
+        });
+
+        trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
+            if ("QUEUED".equals(r.getTrainStatus()) || "RUNNING".equals(r.getTrainStatus())) {
+                r.setTrainStatus("IDLE");
+                trainingRecordRepository.save(r);
+            }
         });
 
         taskStatusMap.remove(recordName);

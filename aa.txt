@@ -1,0 +1,128 @@
+ancious@master:~/Code$ kubectl get pods -n yolo-system -o wide
+NAME                                               READY   STATUS    RESTARTS       AGE     IP            NODE      NOMINATED NODE   READINESS GATES
+nfs-subdir-external-provisioner-6ff5bb4c7f-vn65z   1/1     Running   1 (139m ago)   162m    10.244.1.21   worker1   <none>           <none>
+yolo-backend-db8fdb64f-fvr89                       1/1     Running   0              4m10s   10.244.2.17   worker2   <none>           <none>
+yolo-frontend-6b6c6d7c6f-f8lxq                     1/1     Running   0              8m26s   10.244.1.32   worker1   <none>           <none>
+yolo-mysql-0                                       1/1     Running   4 (139m ago)   16h     10.244.1.22   worker1   <none>           <none>
+ancious@master:~/Code$ kubectl get pvc -n yolo-system
+NAME              STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+yolo-mysql-data   Bound    pvc-8f58a8c5-70a8-4de2-a6ab-4656c234c928   10Gi       RWO            nfs-storage    <unset>                 18h
+yolo-workspace    Bound    pvc-b9d4921d-51e8-4ece-8567-59fa150040ca   50Gi       RWX            nfs-storage    <unset>                 18h
+ancious@master:~/Code$ kubectl get configmap yolo-backend-config -n yolo-system -o yaml
+apiVersion: v1
+data:
+  K8S_NAMESPACE: yolo-system
+  MOUNT_PATH: /app/data
+  PROJECT_ROOT: /app/data
+  PVC_NAME: yolo-workspace
+  SPRING_PROFILES_ACTIVE: prod
+  TRAINING_IMAGE: docker.io/ancious/yolov8-trainer:v1.0.0
+  USE_PVC: "true"
+kind: ConfigMap
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"v1","data":{"K8S_NAMESPACE":"yolo-system","MOUNT_PATH":"/app/data","PROJECT_ROOT":"/app/data","PVC_NAME":"yolo-workspace","SPRING_PROFILES_ACTIVE":"prod","TRAINING_IMAGE":"docker.io/ancious/yolov8-trainer:v1.0.0","USE_PVC":"true"},"kind":"ConfigMap","metadata":{"annotations":{},"name":"yolo-backend-config","namespace":"yolo-system"}}
+  creationTimestamp: "2026-05-09T13:37:00Z"
+  name: yolo-backend-config
+  namespace: yolo-system
+  resourceVersion: "38243"
+  uid: 21e09263-673c-410e-846b-8774046c9226
+ancious@master:~/Code$ ls -la /data/nfs/yolo/
+总计 20
+drwxrwxrwx 4 root root 4096  5月  9 20:20 .
+drwxr-xr-x 3 root root 4096  5月  9 20:10 ..
+-rw-r--r-- 1 root root    6  5月  9 20:14 test.txt
+drwxrwxrwx 8  999 root 4096  5月 10 12:06 yolo-system-yolo-mysql-data-pvc-8f58a8c5-70a8-4de2-a6ab-4656c234c928
+drwxrwxrwx 2 root root 4096  5月 10 13:05 yolo-system-yolo-workspace-pvc-b9d4921d-51e8-4ece-8567-59fa150040ca
+ancious@master:~/Code$ find /data/nfs/ -maxdepth 3 -type d 2>/dev/null | head -30
+/data/nfs/
+/data/nfs/yolo
+/data/nfs/yolo/yolo-system-yolo-mysql-data-pvc-8f58a8c5-70a8-4de2-a6ab-4656c234c928
+/data/nfs/yolo/yolo-system-yolo-mysql-data-pvc-8f58a8c5-70a8-4de2-a6ab-4656c234c928/sys
+/data/nfs/yolo/yolo-system-yolo-mysql-data-pvc-8f58a8c5-70a8-4de2-a6ab-4656c234c928/performance_schema
+/data/nfs/yolo/yolo-system-yolo-mysql-data-pvc-8f58a8c5-70a8-4de2-a6ab-4656c234c928/#innodb_temp
+/data/nfs/yolo/yolo-system-yolo-mysql-data-pvc-8f58a8c5-70a8-4de2-a6ab-4656c234c928/#innodb_redo
+/data/nfs/yolo/yolo-system-yolo-mysql-data-pvc-8f58a8c5-70a8-4de2-a6ab-4656c234c928/k8s_yolo_db
+/data/nfs/yolo/yolo-system-yolo-mysql-data-pvc-8f58a8c5-70a8-4de2-a6ab-4656c234c928/mysql
+/data/nfs/yolo/yolo-system-yolo-workspace-pvc-b9d4921d-51e8-4ece-8567-59fa150040ca
+ancious@master:~/Code$ kubectl run check-trainer --image=ancious/
+error: Invalid image name "ancious/": invalid reference format
+ancious@master:~/Code$ kubectl run check-trainer --image=ancious/yolov8-trainer:v1.0.0 --restart=Never -n yolo-system -- sleep 60
+pod/check-trainer created
+ancious@master:~/Code$ kubectl exec -n yolo-system check-trainer -- ls -la /app/workspace/
+total 6432
+drwxr-xr-x 1 root root    4096 May  9 13:17 .
+drwxr-xr-x 1 root root    4096 May  9 13:10 ..
+-rw-rw-r-- 1 root root    9631 May  9 13:03 preprocess.py
+-rw-rw-r-- 1 root root      65 May  9 13:03 requirements.txt
+-rw-rw-r-- 1 root root    2567 May  9 13:03 test_yolo.py
+-rw-rw-r-- 1 root root    1877 May  9 13:03 train_yolo.py
+-rw-rw-r-- 1 root root 6549796 May  9 13:05 yolov8n.pt
+ancious@master:~/Code$ kubectl exec -n yolo-system check-trainer -- ls -la /app/data/ 2>/dev/null || echo "/app/data not exists"
+/app/data not exists
+ancious@master:~/Code$ kubectl exec -n yolo-system check-trainer -- env | grep -i data
+ancious@master:~/Code$ kubectl delete pod check-trainer -n yolo-system --force
+Warning: Immediate deletion does not wait for confirmation that the running resource has been terminated. The resource may continue to run on the cluster indefinitely.
+pod "check-trainer" force deleted
+ancious@master:~/Code$ kubectl logs -n yolo-system deploy/yolo-backend --tail=80
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v4.0.6)
+
+2026-05-10T06:21:33.865Z  INFO 1 --- [           main] c.e.yoloproject.YoloProjectApplication   : Starting YoloProjectApplication v0.0.1-SNAPSHOT using Java 21.0.11 with PID 1 (/app/app.jar started by root in /app)
+2026-05-10T06:21:33.890Z DEBUG 1 --- [           main] c.e.yoloproject.YoloProjectApplication   : Running with Spring Boot v4.0.6, Spring v7.0.7
+2026-05-10T06:21:33.896Z  INFO 1 --- [           main] c.e.yoloproject.YoloProjectApplication   : The following 1 profile is active: "prod"
+2026-05-10T06:21:37.150Z  INFO 1 --- [           main] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data JPA repositories in DEFAULT mode.
+2026-05-10T06:21:37.442Z  INFO 1 --- [           main] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 248 ms. Found 6 JPA repository interfaces.
+2026-05-10T06:21:39.284Z  INFO 1 --- [           main] o.s.boot.tomcat.TomcatWebServer          : Tomcat initialized with port 8080 (http)
+2026-05-10T06:21:39.338Z  INFO 1 --- [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-05-10T06:21:39.338Z  INFO 1 --- [           main] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/11.0.21]
+2026-05-10T06:21:39.420Z  INFO 1 --- [           main] b.w.c.s.WebApplicationContextInitializer : Root WebApplicationContext: initialization completed in 5175 ms
+2026-05-10T06:21:40.464Z  INFO 1 --- [           main] org.hibernate.orm.jpa                    : HHH008540: Processing PersistenceUnitInfo [name: default]
+2026-05-10T06:21:40.682Z  INFO 1 --- [           main] org.hibernate.orm.core                   : HHH000001: Hibernate ORM core version 7.2.12.Final
+2026-05-10T06:21:42.596Z  INFO 1 --- [           main] o.s.o.j.p.SpringPersistenceUnitInfo      : No LoadTimeWeaver setup: ignoring JPA class transformer
+2026-05-10T06:21:42.726Z  INFO 1 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-05-10T06:21:43.733Z  INFO 1 --- [           main] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Added connection com.mysql.cj.jdbc.ConnectionImpl@5b1f5fcc
+2026-05-10T06:21:43.740Z  INFO 1 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+2026-05-10T06:21:44.228Z  INFO 1 --- [           main] org.hibernate.orm.connections.pooling    : HHH10001005: Database info:
+        Database JDBC URL [jdbc:mysql://yolo-mysql:3306/k8s_yolo_db?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai]
+        Database driver: MySQL Connector/J
+        Database dialect: MySQLDialect
+        Database version: 8.0.46
+        Default catalog/schema: k8s_yolo_db/undefined
+        Autocommit mode: undefined/unknown
+        Isolation level: REPEATABLE_READ [default REPEATABLE_READ]
+        JDBC fetch size: none
+        Pool: DataSourceConnectionProvider
+        Minimum pool size: undefined/unknown
+        Maximum pool size: undefined/unknown
+2026-05-10T06:21:47.518Z  INFO 1 --- [           main] org.hibernate.orm.core                   : HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
+2026-05-10T06:21:47.763Z  INFO 1 --- [           main] j.LocalContainerEntityManagerFactoryBean : Initialized JPA EntityManagerFactory for persistence unit 'default'
+2026-05-10T06:21:48.041Z  INFO 1 --- [           main] o.s.d.j.r.query.QueryEnhancerFactories   : Hibernate is in classpath; If applicable, HQL parser will be used.
+2026-05-10T06:21:49.963Z  INFO 1 --- [           main] c.e.y.service.K8sClientService           : K8s client: using in-cluster config
+2026-05-10T06:21:49.980Z  INFO 1 --- [           main] c.e.y.service.K8sClientService           : K8s client initialized successfully, namespace: yolo-system
+2026-05-10T06:21:49.982Z  INFO 1 --- [           main] c.e.yoloproject.service.YoloService      : YoloService initialized, PROJECT_ROOT=/app/data/, trainingImage=docker.io/ancious/yolov8-trainer:v1.0.0, pvcName=yolo-workspace, usePvc=true
+root 用户已存在，跳过创建
+2026-05-10T06:21:51.473Z  INFO 1 --- [           main] c.e.y.service.TrainingSchedulerService   : Loaded schedulingMode: auto
+2026-05-10T06:21:51.614Z  WARN 1 --- [           main] JpaBaseConfiguration$JpaWebConfiguration : spring.jpa.open-in-view is enabled by default. Therefore, database queries may be performed during view rendering. Explicitly configure spring.jpa.open-in-view to disable this warning
+2026-05-10T06:21:52.536Z  INFO 1 --- [           main] o.s.boot.tomcat.TomcatWebServer          : Tomcat started on port 8080 (http) with context path '/'
+2026-05-10T06:21:52.606Z  INFO 1 --- [           main] c.e.yoloproject.YoloProjectApplication   : Started YoloProjectApplication in 20.243 seconds (process running for 22.468)
+2026-05-10T06:21:54.485Z DEBUG 1 --- [   scheduling-1] c.e.y.service.NodeManagementService      : Node sync completed, 3 nodes from cluster
+2026-05-10T06:22:04.445Z  INFO 1 --- [nio-8080-exec-1] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-05-10T06:22:04.445Z  INFO 1 --- [nio-8080-exec-1] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-05-10T06:22:04.447Z  INFO 1 --- [nio-8080-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 2 ms
+2026-05-10T06:22:24.697Z DEBUG 1 --- [   scheduling-1] c.e.y.service.NodeManagementService      : Node sync completed, 3 nodes from cluster
+2026-05-10T06:22:54.984Z DEBUG 1 --- [   scheduling-1] c.e.y.service.NodeManagementService      : Node sync completed, 3 nodes from cluster
+2026-05-10T06:23:25.203Z DEBUG 1 --- [   scheduling-1] c.e.y.service.NodeManagementService      : Node sync completed, 3 nodes from cluster
+2026-05-10T06:23:55.392Z DEBUG 1 --- [   scheduling-1] c.e.y.service.NodeManagementService      : Node sync completed, 3 nodes from cluster
+2026-05-10T06:24:25.580Z DEBUG 1 --- [   scheduling-1] c.e.y.service.NodeManagementService      : Node sync completed, 3 nodes from cluster
+2026-05-10T06:24:55.733Z DEBUG 1 --- [   scheduling-1] c.e.y.service.NodeManagementService      : Node sync completed, 3 nodes from cluster
+2026-05-10T06:25:25.900Z DEBUG 1 --- [   scheduling-1] c.e.y.service.NodeManagementService      : Node sync completed, 3 nodes from cluster
+2026-05-10T06:25:56.021Z DEBUG 1 --- [   scheduling-1] c.e.y.service.NodeManagementService      : Node sync completed, 3 nodes from cluster

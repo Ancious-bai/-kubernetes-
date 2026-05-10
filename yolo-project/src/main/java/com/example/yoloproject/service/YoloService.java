@@ -106,13 +106,13 @@ public class YoloService {
             String podName = null;
             String dataName = new File(inputDir).getName();
             try {
-                String preprocessJobName = dataName + "-preprocess-job";
+                String preprocessJobName = K8sClientService.sanitizeK8sName(dataName + "-preprocess-job");
 
                 k8sClientService.deleteJob(preprocessJobName);
                 Thread.sleep(1000);
 
                 V1Job job = k8sClientService.buildPreprocessJob(
-                        preprocessJobName, dataName, inputDir,
+                        dataName + "-preprocess-job", dataName, inputDir,
                         trainingImage, pvcName, mountPath
                 );
                 k8sClientService.createJob(job);
@@ -252,13 +252,13 @@ public class YoloService {
         executorService.submit(() -> {
             String podName = null;
             try {
-                String trainJobName = recordName + "-train-job";
+                String trainJobName = K8sClientService.sanitizeK8sName(recordName + "-train-job");
                 k8sClientService.deleteJob(trainJobName);
                 Thread.sleep(1000);
 
                 String effectivePvc = usePvc ? pvcName : null;
                 V1Job job = k8sClientService.buildTrainingJob(
-                        trainJobName, dataName, recordName,
+                        recordName + "-train-job", dataName, recordName,
                         epochs, imgsz, trainingImage,
                         effectivePvc, mountPath,
                         null, null, null
@@ -365,7 +365,7 @@ public class YoloService {
         return jobId;
     }
 
-    public String startTesting(String dataName, int imgsz, String recordName) {
+    public String startTesting(String dataName, int imgsz, String recordName, String targetNode) {
         String jobId = UUID.randomUUID().toString();
         JobStatus status = new JobStatus(jobId, "RUNNING", 0, "");
         jobStatusMap.put(jobId, status);
@@ -379,16 +379,16 @@ public class YoloService {
         executorService.submit(() -> {
             String podName = null;
             try {
-                String testJobName = recordName + "-test-job";
+                String testJobName = K8sClientService.sanitizeK8sName(recordName + "-test-job");
                 k8sClientService.deleteJob(testJobName);
                 Thread.sleep(1000);
 
                 String effectivePvc = usePvc ? pvcName : null;
                 V1Job job = k8sClientService.buildTestJob(
-                        testJobName, dataName, recordName,
+                        recordName + "-test-job", dataName, recordName,
                         imgsz, trainingImage,
                         effectivePvc, mountPath,
-                        null, null
+                        targetNode, null
                 );
                 k8sClientService.createJob(job);
                 log.info("Test job created: {}", testJobName);
@@ -499,13 +499,13 @@ public class YoloService {
         executorService.submit(() -> {
             String podName = null;
             try {
-                String trainJobName = effectiveRecordName + "-train-job";
+                String trainJobName = K8sClientService.sanitizeK8sName(effectiveRecordName + "-train-job");
                 k8sClientService.deleteJob(trainJobName);
                 Thread.sleep(1000);
 
                 String effectivePvc = usePvc ? pvcName : null;
                 V1Job job = k8sClientService.buildTrainingJob(
-                        trainJobName, dataName, effectiveRecordName,
+                        effectiveRecordName + "-train-job", dataName, effectiveRecordName,
                         epochs, imgsz, trainingImage,
                         effectivePvc, mountPath,
                         nodeName, nodeSelector, gpuResources
@@ -705,8 +705,8 @@ public class YoloService {
             }
 
             try {
-                k8sClientService.deleteJob(dataName + "-preprocess-job");
-                k8sClientService.deletePodsByJob(dataName + "-preprocess-job");
+                k8sClientService.deleteJob(K8sClientService.sanitizeK8sName(dataName + "-preprocess-job"));
+                k8sClientService.deletePodsByJob(K8sClientService.sanitizeK8sName(dataName + "-preprocess-job"));
                 logBuilder.append("Cleaned up preprocess K8s resources\n");
             } catch (Exception e) {
                 log.debug("Preprocess K8s cleanup: {}", e.getMessage());
@@ -760,10 +760,10 @@ public class YoloService {
 
     private void bestEffortDeleteRecordAssets(String recordName) {
         try {
-            k8sClientService.deleteJob(recordName + "-train-job");
-            k8sClientService.deleteJob(recordName + "-test-job");
-            k8sClientService.deletePodsByJob(recordName + "-train-job");
-            k8sClientService.deletePodsByJob(recordName + "-test-job");
+            k8sClientService.deleteJob(K8sClientService.sanitizeK8sName(recordName + "-train-job"));
+            k8sClientService.deleteJob(K8sClientService.sanitizeK8sName(recordName + "-test-job"));
+            k8sClientService.deletePodsByJob(K8sClientService.sanitizeK8sName(recordName + "-train-job"));
+            k8sClientService.deletePodsByJob(K8sClientService.sanitizeK8sName(recordName + "-test-job"));
         } catch (Exception e) {
             log.debug("K8s cleanup exception (ignorable): {}", e.getMessage());
         }
@@ -868,18 +868,18 @@ public class YoloService {
             for (TrainingRecord rec : allRecords) {
                 String recName = rec.getRecordName();
                 if (recName != null && !recName.isEmpty()) {
-                    k8sClientService.deleteJob(recName + "-train-job");
-                    k8sClientService.deleteJob(recName + "-test-job");
-                    k8sClientService.deletePodsByJob(recName + "-train-job");
-                    k8sClientService.deletePodsByJob(recName + "-test-job");
+                    k8sClientService.deleteJob(K8sClientService.sanitizeK8sName(recName + "-train-job"));
+                    k8sClientService.deleteJob(K8sClientService.sanitizeK8sName(recName + "-test-job"));
+                    k8sClientService.deletePodsByJob(K8sClientService.sanitizeK8sName(recName + "-train-job"));
+                    k8sClientService.deletePodsByJob(K8sClientService.sanitizeK8sName(recName + "-test-job"));
                 }
             }
             trainingRecordRepository.deleteAll();
 
             for (Dataset ds : allDatasets) {
                 try {
-                    k8sClientService.deleteJob(ds.getName() + "-preprocess-job");
-                    k8sClientService.deletePodsByJob(ds.getName() + "-preprocess-job");
+                    k8sClientService.deleteJob(K8sClientService.sanitizeK8sName(ds.getName() + "-preprocess-job"));
+                    k8sClientService.deletePodsByJob(K8sClientService.sanitizeK8sName(ds.getName() + "-preprocess-job"));
                 } catch (Exception ignored) {}
                 try {
                     deleteDirectory(new File(PROJECT_ROOT + ds.getName() + "_processed"));

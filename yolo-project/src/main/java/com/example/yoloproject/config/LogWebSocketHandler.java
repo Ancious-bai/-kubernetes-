@@ -255,6 +255,19 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
+        cleanupSession(session);
+    }
+
+    @Override
+    public void handleTransportError(WebSocketSession session, Throwable exception) throws Exception {
+        log.warn("WebSocket transport error: {}", exception.getMessage());
+        cleanupSession(session);
+        if (session.isOpen()) {
+            try { session.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    private void cleanupSession(WebSocketSession session) {
         Map<String, String> pathVariables = getUriVariables(session);
         String recordName = pathVariables.get("recordName");
         String type = pathVariables.get("type");

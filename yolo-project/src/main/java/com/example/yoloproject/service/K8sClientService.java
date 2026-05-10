@@ -28,6 +28,17 @@ public class K8sClientService {
 
     private static final Logger log = LoggerFactory.getLogger(K8sClientService.class);
 
+    public static String sanitizeK8sName(String name) {
+        if (name == null || name.isEmpty()) return "unnamed";
+        String sanitized = name.toLowerCase()
+                .replaceAll("[^a-z0-9.-]", "-")
+                .replaceAll("-+", "-")
+                .replaceAll("^-+|-+$", "");
+        if (sanitized.isEmpty() || sanitized.equals("-")) sanitized = "job";
+        if (sanitized.length() > 63) sanitized = sanitized.substring(0, 63);
+        return sanitized.replaceAll("-+$", "");
+    }
+
     private CoreV1Api coreApi;
     private BatchV1Api batchApi;
 
@@ -391,7 +402,7 @@ public class K8sClientService {
         V1Job job = new V1Job();
 
         V1ObjectMeta metadata = new V1ObjectMeta();
-        metadata.setName(jobName);
+        metadata.setName(sanitizeK8sName(jobName));
         Map<String, String> labels = new HashMap<>();
         labels.put("site", dataName);
         labels.put("type", "preprocess");
@@ -424,16 +435,22 @@ public class K8sClientService {
             effectiveInputDir = inputDir.replace("/app/workspace/", "/app/data/");
         } else if (inputDir != null && !inputDir.startsWith("/")) {
             effectiveInputDir = "/app/data/" + inputDir;
+        } else if (inputDir != null && !inputDir.startsWith("/app/data")) {
+            log.warn("Input dir {} is outside PVC mount /app/data/, prepending /app/data/", inputDir);
+            effectiveInputDir = "/app/data/" + inputDir.replaceFirst("^/+", "");
         }
 
         List<String> command = Arrays.asList("python3", "/app/workspace/preprocess.py",
                 "--input_dir", effectiveInputDir);
         container.setCommand(command);
 
-        V1EnvVar envVar = new V1EnvVar();
-        envVar.setName("PYTHONUNBUFFERED");
-        envVar.setValue("1");
-        container.setEnv(Collections.singletonList(envVar));
+        V1EnvVar envVar1 = new V1EnvVar();
+        envVar1.setName("PYTHONUNBUFFERED");
+        envVar1.setValue("1");
+        V1EnvVar envVar2 = new V1EnvVar();
+        envVar2.setName("DATA_ROOT");
+        envVar2.setValue("/app/data");
+        container.setEnv(Arrays.asList(envVar1, envVar2));
 
         if (pvcName != null && !pvcName.isEmpty()) {
             V1VolumeMount volumeMount = new V1VolumeMount();
@@ -479,7 +496,7 @@ public class K8sClientService {
         V1Job job = new V1Job();
 
         V1ObjectMeta metadata = new V1ObjectMeta();
-        metadata.setName(jobName);
+        metadata.setName(sanitizeK8sName(jobName));
         Map<String, String> labels = new HashMap<>();
         labels.put("site", dataName);
         labels.put("type", "train");
@@ -522,10 +539,13 @@ public class K8sClientService {
                 "--imgsz", String.valueOf(imgsz));
         container.setCommand(command);
 
-        V1EnvVar envVar = new V1EnvVar();
-        envVar.setName("PYTHONUNBUFFERED");
-        envVar.setValue("1");
-        container.setEnv(Collections.singletonList(envVar));
+        V1EnvVar trainEnv1 = new V1EnvVar();
+        trainEnv1.setName("PYTHONUNBUFFERED");
+        trainEnv1.setValue("1");
+        V1EnvVar trainEnv2 = new V1EnvVar();
+        trainEnv2.setName("DATA_ROOT");
+        trainEnv2.setValue("/app/data");
+        container.setEnv(Arrays.asList(trainEnv1, trainEnv2));
 
         if (pvcName != null && !pvcName.isEmpty()) {
             V1VolumeMount volumeMount = new V1VolumeMount();
@@ -580,7 +600,7 @@ public class K8sClientService {
         V1Job job = new V1Job();
 
         V1ObjectMeta metadata = new V1ObjectMeta();
-        metadata.setName(jobName);
+        metadata.setName(sanitizeK8sName(jobName));
         Map<String, String> labels = new HashMap<>();
         labels.put("site", dataName);
         labels.put("type", "test");
@@ -622,10 +642,13 @@ public class K8sClientService {
                 "--imgsz", String.valueOf(imgsz));
         container.setCommand(command);
 
-        V1EnvVar envVar = new V1EnvVar();
-        envVar.setName("PYTHONUNBUFFERED");
-        envVar.setValue("1");
-        container.setEnv(Collections.singletonList(envVar));
+        V1EnvVar testEnv1 = new V1EnvVar();
+        testEnv1.setName("PYTHONUNBUFFERED");
+        testEnv1.setValue("1");
+        V1EnvVar testEnv2 = new V1EnvVar();
+        testEnv2.setName("DATA_ROOT");
+        testEnv2.setValue("/app/data");
+        container.setEnv(Arrays.asList(testEnv1, testEnv2));
 
         if (pvcName != null && !pvcName.isEmpty()) {
             V1VolumeMount volumeMount = new V1VolumeMount();
