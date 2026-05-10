@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import jakarta.annotation.PostConstruct;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.stream.Collectors;
 
 @Service
 public class TrainingSchedulerService {
@@ -31,9 +32,6 @@ public class TrainingSchedulerService {
     @Autowired
     private NodeManagementService nodeManagementService;
 
-    private static final String MAX_CONCURRENT_TASKS_KEY = "max.concurrent.tasks";
-    private static final String MAX_CONCURRENT_TASKS_DEFAULT = "2";
-    private static final String MAX_CONCURRENT_TASKS_DESC = "最大同时训练任务数";
     private static final String DEFAULT_EPOCHS_KEY = "default.epochs";
     private static final String DEFAULT_EPOCHS_VALUE = "2";
     private static final String DEFAULT_EPOCHS_DESC = "默认训练轮数";
@@ -44,7 +42,6 @@ public class TrainingSchedulerService {
     private static final String SCHEDULING_MODE_DEFAULT = "auto";
     private static final String SCHEDULING_MODE_DESC = "调度模式(auto/manual)";
 
-    private volatile int maxConcurrentTasks = 2;
     private volatile int defaultEpochs = 2;
     private volatile int defaultImgsz = 640;
     private volatile String schedulingMode = "auto";
@@ -62,45 +59,51 @@ public class TrainingSchedulerService {
 
     @PostConstruct
     public void init() {
-        loadMaxConcurrentTasksFromDB();
         loadDefaultEpochsFromDB();
         loadDefaultImgszFromDB();
         loadSchedulingModeFromDB();
         schedulerExecutor.submit(this::processQueue);
     }
 
-    private void loadMaxConcurrentTasksFromDB() {
-        SystemConfig config = systemConfigRepository.findByConfigKey(MAX_CONCURRENT_TASKS_KEY)
-            .orElseGet(() -> {
-                SystemConfig defaultConfig = new SystemConfig(
-                    MAX_CONCURRENT_TASKS_KEY,
-                    MAX_CONCURRENT_TASKS_DEFAULT,
-                    MAX_CONCURRENT_TASKS_DESC
-                );
-                return systemConfigRepository.save(defaultConfig);
-            });
-        try {
-            this.maxConcurrentTasks = Integer.parseInt(config.getConfigValue());
-            log.info("Loaded maxConcurrentTasks: {}", this.maxConcurrentTasks);
-        } catch (NumberFormatException e) {
-            this.maxConcurrentTasks = Integer.parseInt(MAX_CONCURRENT_TASKS_DEFAULT);
-        }
+    public int getTotalMaxConcurrentTasks() {
+        return nodeManagementService.getSchedulableNodes().stream()
+                .filter(NodeInfo::getReady)
+                .mapToInt(n -> n.getMaxConcurrentTasks() != null ? n.getMaxConcurrentTasks() : 1)
+                .sum();
     }
 
-    public synchronized void setMaxConcurrentTasks(int max) {
-        if (max >= 1 && max <= 10) {
-            this.maxConcurrentTasks = max;
-            SystemConfig config = systemConfigRepository.findByConfigKey(MAX_CONCURRENT_TASKS_KEY)
-                .orElse(new SystemConfig(MAX_CONCURRENT_TASKS_KEY, String.valueOf(max), MAX_CONCURRENT_TASKS_DESC));
-            config.setConfigValue(String.valueOf(max));
-            systemConfigRepository.save(config);
-            log.info("MaxConcurrentTasks saved: {}", max);
-            notifyNewTask();
-        }
+    public int getRunningTaskCountOnNode(String nodeName) {
+        return (int) runningTasks.stream()
+                .filter(t -> nodeName.equals(t.getTargetNode()))
+                .count();
     }
 
-    public synchronized int getMaxConcurrentTasks() {
-        return maxConcurrentTasks;
+    public int getNodeMaxConcurrent(String nodeName) {
+        return nodeManagementService.getNodeByName(nodeName)
+                .map(n -> n.getMaxConcurrentTasks() != null ? n.getMaxConcurrentTasks() : 1)
+                .orElse(1);
+    }
+
+    private NodeInfo selectNodeForTask(Map<String, String> gpuResources) {
+        List<NodeInfo> candidates = nodeManagementService.getSchedulableNodes().stream()
+                .filter(NodeInfo::getReady)
+                .filter(n -> {
+                    int max = n.getMaxConcurrentTasks() != null ? n.getMaxConcurrentTasks() : 1;
+                    return getRunningTaskCountOnNode(n.getNodeName()) < max;
+                })
+                .collect(Collectors.toList());
+
+        if (gpuResources != null && !gpuResources.isEmpty()) {
+            candidates = candidates.stream()
+                    .filter(n -> n.getGpuAllocatable() != null && !n.getGpuAllocatable().equals("0"))
+                    .collect(Collectors.toList());
+        }
+
+        if (candidates.isEmpty()) return null;
+
+        return candidates.stream()
+                .min(Comparator.comparingInt(n -> getRunningTaskCountOnNode(n.getNodeName())))
+                .orElse(null);
     }
 
     private void loadDefaultEpochsFromDB() {
@@ -221,7 +224,7 @@ public class TrainingSchedulerService {
         Map<String, String> effectiveGpuResources = gpuResources;
 
         if ("auto".equals(schedulingMode) && effectiveNode == null) {
-            NodeInfo selectedNode = nodeManagementService.selectBestNodeForTraining(gpuResources);
+            NodeInfo selectedNode = selectNodeForTask(gpuResources);
             if (selectedNode != null) {
                 effectiveNode = selectedNode.getNodeName();
                 log.info("Auto-scheduling: task {} assigned to node {}", recordName, effectiveNode);
@@ -333,22 +336,44 @@ public class TrainingSchedulerService {
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 synchronized (this) {
-                    while (taskQueue.isEmpty() || runningTasks.size() >= maxConcurrentTasks) {
+                    int totalMax = getTotalMaxConcurrentTasks();
+                    while (taskQueue.isEmpty() || runningTasks.size() >= totalMax) {
                         wait();
+                        totalMax = getTotalMaxConcurrentTasks();
                     }
 
-                    while (runningTasks.size() < maxConcurrentTasks && !taskQueue.isEmpty()) {
-                        TrainingTask task = taskQueue.poll();
-                        if (task != null) {
-                            runningTasks.add(task);
+                    while (runningTasks.size() < totalMax && !taskQueue.isEmpty()) {
+                        TrainingTask task = taskQueue.peek();
+                        if (task == null) break;
 
+                        String targetNode = task.getTargetNode();
+                        boolean canSchedule = false;
+
+                        if (targetNode != null && !targetNode.isEmpty()) {
+                            int nodeMax = getNodeMaxConcurrent(targetNode);
+                            int nodeRunning = getRunningTaskCountOnNode(targetNode);
+                            canSchedule = nodeRunning < nodeMax;
+                        } else {
+                            canSchedule = true;
+                            NodeInfo selected = selectNodeForTask(task.getGpuResources());
+                            if (selected != null) {
+                                task.setTargetNode(selected.getNodeName());
+                            } else {
+                                canSchedule = false;
+                            }
+                        }
+
+                        if (canSchedule) {
+                            taskQueue.poll();
+                            runningTasks.add(task);
                             trainingRecordRepository.findByRecordName(task.getRecordName()).ifPresent(r -> {
                                 r.setTrainStatus("RUNNING");
                                 trainingRecordRepository.save(r);
                             });
                             taskStatusMap.put(task.getRecordName(), "RUNNING");
-
                             workerExecutor.submit(() -> executeTask(task));
+                        } else {
+                            break;
                         }
                     }
                 }
@@ -457,7 +482,7 @@ public class TrainingSchedulerService {
 
     public Map<String, Object> getConfig() {
         Map<String, Object> config = new HashMap<>();
-        config.put("maxConcurrentTasks", maxConcurrentTasks);
+        config.put("totalMaxConcurrentTasks", getTotalMaxConcurrentTasks());
         config.put("defaultEpochs", defaultEpochs);
         config.put("defaultImgsz", defaultImgsz);
         config.put("schedulingMode", schedulingMode);
@@ -470,7 +495,7 @@ public class TrainingSchedulerService {
         private final int epochs;
         private final int imgsz;
         private final String recordName;
-        private final String targetNode;
+        private String targetNode;
         private final Map<String, String> nodeSelector;
         private final Map<String, String> gpuResources;
 
@@ -493,6 +518,7 @@ public class TrainingSchedulerService {
         public int getImgsz() { return imgsz; }
         public String getRecordName() { return recordName; }
         public String getTargetNode() { return targetNode; }
+        public void setTargetNode(String targetNode) { this.targetNode = targetNode; }
         public Map<String, String> getNodeSelector() { return nodeSelector; }
         public Map<String, String> getGpuResources() { return gpuResources; }
     }

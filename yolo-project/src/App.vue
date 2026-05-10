@@ -34,28 +34,22 @@
       <div v-show="activePage==='main'" class="page-main">
         <div class="page-header"><h2>训练管理</h2></div>
         <div class="top-section">
-          <el-card shadow="hover" class="top-card dataset-card-top">
-            <template #header><span class="card-title">添加数据集</span></template>
-            <div class="input-row">
-              <el-input v-model="form.inputDir" placeholder="输入数据集名称（如 cat-dataset）" @keyup.enter="handleAddDataset" size="large" clearable class="input-flex" />
-              <el-button type="primary" @click="handleAddDataset" :loading="currentStep==='addDataset'">添加</el-button>
-            </div>
-            <div class="input-row" style="margin-top:8px">
-              <span style="font-size:12px;color:#999;line-height:32px">或</span>
+          <el-card shadow="hover" class="top-card upload-card">
+            <template #header><span class="card-title">上传数据集</span></template>
+            <div class="upload-area" :class="{'upload-area-active':isDragOver}" @dragover.prevent="isDragOver=true" @dragleave.prevent="isDragOver=false" @drop.prevent="handleDrop">
+              <el-icon size="40" class="upload-icon"><UploadFilled /></el-icon>
+              <p class="upload-hint">拖拽 ZIP 文件到此处</p>
+              <p class="upload-sub">或</p>
               <el-upload :show-file-list="false" :before-upload="handleFileUpload" accept=".zip" :disabled="currentStep==='addDataset'">
-                <el-button type="success" size="large" :loading="currentStep==='addDataset'">上传ZIP数据集</el-button>
+                <el-button type="primary" size="large" :loading="currentStep==='addDataset'">点击选择 ZIP 文件</el-button>
               </el-upload>
             </div>
-            <div class="drop-zone" :class="{'drop-zone-active':isDragOver}" @dragover.prevent="isDragOver=true" @dragleave.prevent="isDragOver=false" @drop.prevent="handleDrop">
-              <div class="drop-zone-text"><el-icon size="28"><UploadFilled /></el-icon><span>拖拽 ZIP 文件到此处上传数据集</span></div>
-            </div>
           </el-card>
-          <el-card shadow="hover" class="top-card config-card-top">
+          <el-card shadow="hover" class="top-card config-card">
             <template #header><span class="card-title">全局配置</span></template>
             <div class="config-row">
-              <div class="cfg-item"><span class="cfg-label">同时训练</span><el-input-number v-model="maxConcurrentTasks" :min="1" :max="10" size="small" style="width:70px" /><el-button type="primary" size="small" @click="handleMaxConcurrentTasksChange(maxConcurrentTasks)">保存</el-button></div>
-              <div class="cfg-item"><span class="cfg-label">Epochs</span><el-input-number v-model="defaultEpochs" :min="1" :max="1000" size="small" style="width:80px" /><el-button type="primary" size="small" @click="handleDefaultEpochsChange(defaultEpochs)">保存</el-button></div>
-              <div class="cfg-item"><span class="cfg-label">Imgsz</span><el-input-number v-model="defaultImgsz" :min="32" :max="1280" :step="32" size="small" style="width:100px" /><el-button type="primary" size="small" @click="handleDefaultImgszChange(defaultImgsz)">保存</el-button></div>
+              <div class="cfg-item"><span class="cfg-label">Epochs</span><el-input-number v-model="defaultEpochs" :min="1" :max="1000" size="small" style="width:100px" /><el-button type="primary" size="small" @click="handleDefaultEpochsChange(defaultEpochs)">保存</el-button></div>
+              <div class="cfg-item"><span class="cfg-label">Imgsz</span><el-input-number v-model="defaultImgsz" :min="32" :max="1280" :step="32" size="small" style="width:120px" /><el-button type="primary" size="small" @click="handleDefaultImgszChange(defaultImgsz)">保存</el-button></div>
             </div>
           </el-card>
         </div>
@@ -159,22 +153,21 @@
           <el-card shadow="hover" class="overview-card"><div class="overview-value">{{ clusterOverview.totalNodes || 0 }}</div><div class="overview-label">总节点数</div></el-card>
           <el-card shadow="hover" class="overview-card overview-ready"><div class="overview-value">{{ clusterOverview.readyNodes || 0 }}</div><div class="overview-label">就绪节点</div></el-card>
           <el-card shadow="hover" class="overview-card overview-gpu"><div class="overview-value">{{ clusterOverview.gpuNodes || 0 }}</div><div class="overview-label">GPU节点</div></el-card>
-          <el-card shadow="hover" class="overview-card overview-master"><div class="overview-value">{{ clusterOverview.masterNodes || 0 }}</div><div class="overview-label">Master节点</div></el-card>
-          <el-card shadow="hover" class="overview-card overview-worker"><div class="overview-value">{{ clusterOverview.workerNodes || 0 }}</div><div class="overview-label">Worker节点</div></el-card>
+          <el-card shadow="hover" class="overview-card overview-concurrent"><div class="overview-value">{{ totalMaxConcurrent }}</div><div class="overview-label">最大并发</div></el-card>
         </div>
 
         <el-card shadow="hover" style="margin-top:14px">
           <el-table :data="clusterNodes" stripe size="small" class="fixed-table" max-height="500">
-            <el-table-column prop="nodeName" label="节点名称" min-width="140" show-overflow-tooltip />
+            <el-table-column prop="nodeName" label="节点名称" min-width="120" show-overflow-tooltip />
             <el-table-column prop="nodeIp" label="IP地址" width="130" />
             <el-table-column prop="roles" label="角色" width="100" />
-            <el-table-column label="状态" width="90" align="center"><template #default="{row}"><el-tag :type="row.ready?'success':'danger'" size="small">{{ row.ready?'就绪':'未就绪' }}</el-tag></template></el-table-column>
-            <el-table-column label="可调度" width="80" align="center"><template #default="{row}"><el-tag :type="row.schedulable?'success':'warning'" size="small">{{ row.schedulable?'是':'否' }}</el-tag></template></el-table-column>
-            <el-table-column prop="cpuAllocatable" label="CPU(可分配)" width="110" />
-            <el-table-column prop="memoryAllocatable" label="内存(可分配)" width="120" />
-            <el-table-column prop="gpuAllocatable" label="GPU(可分配)" width="110" />
-            <el-table-column prop="kubeletVersion" label="K8s版本" width="100" />
-            <el-table-column label="操作" width="160" align="center"><template #default="{row}"><el-button v-if="row.schedulable" size="small" type="warning" @click="cordonNode(row.nodeName)">停止调度</el-button><el-button v-else size="small" type="success" @click="uncordonNode(row.nodeName)">恢复调度</el-button><el-button v-if="currentUser.role==='ROOT'" size="small" type="danger" @click="deleteNodeRecord(row.nodeName)">删除</el-button></template></el-table-column>
+            <el-table-column label="状态" width="80" align="center"><template #default="{row}"><el-tag :type="row.ready?'success':'danger'" size="small">{{ row.ready?'就绪':'未就绪' }}</el-tag></template></el-table-column>
+            <el-table-column label="可调度" width="70" align="center"><template #default="{row}"><el-tag :type="row.schedulable?'success':'warning'" size="small">{{ row.schedulable?'是':'否' }}</el-tag></template></el-table-column>
+            <el-table-column prop="cpuAllocatable" label="CPU" width="80" />
+            <el-table-column prop="memoryAllocatable" label="内存" width="100" />
+            <el-table-column prop="gpuAllocatable" label="GPU" width="80" />
+            <el-table-column label="并发数" width="130" align="center"><template #default="{row}"><div class="node-concurrent"><el-input-number v-model="row._editMaxConcurrent" size="small" :min="0" :max="10" style="width:80px" /><el-button type="primary" size="small" @click="handleNodeMaxConcurrentChange(row)">保存</el-button></div></template></el-table-column>
+            <el-table-column label="操作" width="140" align="center"><template #default="{row}"><el-button v-if="row.schedulable" size="small" type="warning" @click="cordonNode(row.nodeName)">停止调度</el-button><el-button v-else size="small" type="success" @click="uncordonNode(row.nodeName)">恢复调度</el-button><el-button v-if="currentUser.role==='ROOT'" size="small" type="danger" @click="deleteNodeRecord(row.nodeName)">删除</el-button></template></el-table-column>
           </el-table>
         </el-card>
 
@@ -182,7 +175,7 @@
           <template #header><span class="card-title">调度配置</span></template>
           <div class="config-row">
             <div class="cfg-item"><span class="cfg-label">调度模式</span><el-select v-model="schedulingMode" size="small" style="width:120px" @change="handleSchedulingModeChange"><el-option label="自动调度" value="auto" /><el-option label="手动指定" value="manual" /></el-select></div>
-            <div class="cfg-item"><span class="cfg-label">同时训练</span><el-input-number v-model="maxConcurrentTasks" :min="1" :max="10" size="small" style="width:70px" /><el-button type="primary" size="small" @click="handleMaxConcurrentTasksChange(maxConcurrentTasks)">保存</el-button></div>
+            <div class="cfg-item"><span class="cfg-label">集群最大并发</span><span class="cfg-value">{{ totalMaxConcurrent }}</span><span class="cfg-hint">（各节点并发数之和）</span></div>
           </div>
         </el-card>
       </div>
@@ -240,8 +233,7 @@ const loginForm=reactive({username:'',password:''})
 const loginLoading=ref(false),loginError=ref('')
 const currentUser=reactive({username:'',role:''})
 const token=ref('')
-const form=reactive({inputDir:''})
-const maxConcurrentTasks=ref(2),savedMaxConcurrentTasks=ref(2),defaultEpochs=ref(2),savedDefaultEpochs=ref(2),defaultImgsz=ref(640),savedDefaultImgsz=ref(640)
+const defaultEpochs=ref(2),savedDefaultEpochs=ref(2),defaultImgsz=ref(640),savedDefaultImgsz=ref(640)
 const currentStep=ref(''),datasetList=ref([]),deleteConfirmVisible=ref(false),cleanupConfirmVisible=ref(false),cleanupLoading=ref(false),datasetToDelete=ref('')
 const deleteRecordConfirmVisible=ref(false),recordToDelete=ref('')
 const processingStatus=ref({}),testLoadingStatus=ref({}),trainingRecords=ref([]),userList=ref([]),operationLogs=ref([]),showAddUserDialog=ref(false)
@@ -258,13 +250,14 @@ const activePage=ref('main')
 const preprocessTimers=ref({})
 
 const logFilter=reactive({username:'',action:'',startTime:'',endTime:''})
-const logActions=['ADD_DATASET','PREPROCESS','TRAIN','TEST','SAVE_MODEL','DELETE_DATASET','DELETE_RECORD','CONFIG_CHANGE','CREATE_USER','UPDATE_ROLE','DELETE_USER','CHANGE_PASSWORD']
+const logActions=['ADD_DATASET','UPLOAD_DATASET','PREPROCESS','TRAIN','TEST','SAVE_MODEL','DELETE_DATASET','DELETE_RECORD','CONFIG_CHANGE','CREATE_USER','UPDATE_ROLE','DELETE_USER','CHANGE_PASSWORD']
 const logPage=ref(1),logPageSize=ref(20)
 const userSearch=ref(''),userRoleFilter=ref('')
 
 const clusterNodes=ref([]),clusterOverview=reactive({totalNodes:0,readyNodes:0,gpuNodes:0,masterNodes:0,workerNodes:0}),nodesSyncing=ref(false),schedulingMode=ref('auto')
 const showDistributedTrainDialog=ref(false),distributedTrainForm=reactive({dataName:'',epochs:2,imgsz:640,priority:5,targetNode:'',gpuType:'',gpuCount:1})
 const schedulableNodes=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable))
+const totalMaxConcurrent=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+(n.maxConcurrentTasks||1),0))
 
 const wsConnections=new Map()
 let statusRefreshTimer=null
@@ -277,8 +270,6 @@ const showMsg=(msg,type='success')=>ElMessage({message:msg,type,duration:3000,ce
 const filteredLogs=computed(()=>{let list=[...operationLogs.value];if(logFilter.username){const kw=logFilter.username.toLowerCase();list=list.filter(l=>l.username&&l.username.toLowerCase().includes(kw))}if(logFilter.action){list=list.filter(l=>l.action===logFilter.action)}if(logFilter.startTime){try{const s=new Date(logFilter.startTime);list=list.filter(l=>l.createdAt&&new Date(l.createdAt)>=s)}catch(e){}}if(logFilter.endTime){try{const e=new Date(logFilter.endTime);list=list.filter(l=>l.createdAt&&new Date(l.createdAt)<=e)}catch(e){}}return list})
 const pagedLogList=computed(()=>{const s=(logPage.value-1)*logPageSize.value;return filteredLogs.value.slice(s,s+logPageSize.value)})
 const filteredUserList=computed(()=>{let list=[...userList.value];if(userSearch.value){const kw=userSearch.value.toLowerCase();list=list.filter(u=>u.username.toLowerCase().includes(kw))}if(userRoleFilter.value){list=list.filter(u=>u.role===userRoleFilter.value)}return list})
-
-const looksLikeFullDatasetPath=(p)=>{if(!p||typeof p!=='string')return false;const t=p.trim();if(t.length<1)return false;if(t.startsWith('/'))return t.split('/').filter(Boolean).length>=1;return t.length>=1}
 
 const handleFileUpload=async(file)=>{const dataName=file.name.replace(/\.zip$/i,'');currentStep.value='addDataset';try{const formData=new FormData();formData.append('file',file);formData.append('dataName',dataName);const r=await api.value.post('/api/datasets/upload',formData,{headers:{'Content-Type':'multipart/form-data'},timeout:300000});showMsg(`数据集 ${dataName} 上传成功`);await refreshDatasets();await loadTrainingRecords()}catch(e){showMsg(`上传失败: ${e.response?.data?.message||e.message}`,'error')}finally{currentStep.value='';return false}}
 const canEditUserRole=(row)=>{if(!row||row.role==='ROOT')return false;if(currentUser.username===row.username)return false;if(currentUser.role==='ROOT')return true;if(currentUser.role==='ADMIN'&&row.role==='USER')return true;return false}
@@ -294,13 +285,14 @@ const switchToLogs=()=>{activePage.value='logs';loadOperationLogs()}
 const switchToUsers=()=>{activePage.value='users';loadUsers()}
 const switchToNodes=()=>{activePage.value='nodes';loadClusterNodes();loadClusterOverview()}
 
-const loadClusterNodes=async()=>{try{const r=await api.value.get('/api/nodes');clusterNodes.value=r.data}catch(e){}}
+const loadClusterNodes=async()=>{try{const r=await api.value.get('/api/nodes');clusterNodes.value=r.data.map(n=>({...n,_editMaxConcurrent:n.maxConcurrentTasks||1}))}catch(e){}}
 const loadClusterOverview=async()=>{try{const r=await api.value.get('/api/nodes/overview');Object.assign(clusterOverview,r.data)}catch(e){}}
 const syncNodes=async()=>{nodesSyncing.value=true;try{await api.value.post('/api/nodes/sync');await loadClusterNodes();await loadClusterOverview();showMsg('节点同步完成')}catch(e){showMsg('同步失败','error')}finally{nodesSyncing.value=false}}
 const cordonNode=async(name)=>{try{await api.value.post(`/api/nodes/${name}/cordon`);showMsg(`节点 ${name} 已停止调度`);await loadClusterNodes()}catch(e){showMsg('操作失败','error')}}
 const uncordonNode=async(name)=>{try{await api.value.post(`/api/nodes/${name}/uncordon`);showMsg(`节点 ${name} 已恢复调度`);await loadClusterNodes()}catch(e){showMsg('操作失败','error')}}
 const deleteNodeRecord=async(name)=>{try{await api.value.delete(`/api/nodes/${name}`);showMsg('节点记录已删除');await loadClusterNodes();await loadClusterOverview()}catch(e){showMsg('删除失败','error')}}
 const handleSchedulingModeChange=async(v)=>{try{await api.value.post('/api/scheduler/scheduling-mode',{mode:v});showMsg(`调度模式已设为 ${v==='auto'?'自动':'手动'}`)}catch(e){showMsg('更新失败','error')}}
+const handleNodeMaxConcurrentChange=async(row)=>{try{await api.value.post(`/api/nodes/${row.nodeName}/max-concurrent`,{maxConcurrent:row._editMaxConcurrent});row.maxConcurrentTasks=row._editMaxConcurrent;showMsg(`节点 ${row.nodeName} 并发数已设为 ${row._editMaxConcurrent}`)}catch(e){showMsg('更新失败','error')}}
 
 const showDistributedTrain=(dataName)=>{distributedTrainForm.dataName=dataName;distributedTrainForm.epochs=savedDefaultEpochs.value;distributedTrainForm.imgsz=savedDefaultImgsz.value;distributedTrainForm.priority=5;distributedTrainForm.targetNode='';distributedTrainForm.gpuType='';distributedTrainForm.gpuCount=1;showDistributedTrainDialog.value=true}
 const confirmDistributedTrain=async()=>{const req={dataName:distributedTrainForm.dataName,epochs:distributedTrainForm.epochs,imgsz:distributedTrainForm.imgsz,priority:distributedTrainForm.priority};if(distributedTrainForm.targetNode)req.targetNode=distributedTrainForm.targetNode;if(distributedTrainForm.gpuType&&distributedTrainForm.gpuCount>0){req.gpuResources={};req.gpuResources[distributedTrainForm.gpuType]=String(distributedTrainForm.gpuCount)}try{const r=await api.value.post('/api/scheduler/add',req);showMsg(r.data.message);showDistributedTrainDialog.value=false;await loadTrainingRecords();const rn=`${distributedTrainForm.dataName}-e${distributedTrainForm.epochs}-i${distributedTrainForm.imgsz}`;trainLogs.value[rn]='';connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){showMsg(e.response?.data?.message||'提交失败','error')}}
@@ -309,7 +301,7 @@ const handleLogin=async()=>{if(loginLoading.value)return;loginLoading.value=true
 
 const handleLogout=()=>{token.value='';currentUser.username='';currentUser.role='';isLoggedIn.value=false;localStorage.removeItem('token');localStorage.removeItem('username');localStorage.removeItem('role');stopAllWs();stopStatusRefresh();stopAllPreprocessTimers();datasetList.value=[];trainingRecords.value=[];userList.value=[];operationLogs.value=[];Object.keys(pendingRecords.value).forEach(k=>delete pendingRecords.value[k]);Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k]);Object.keys(processingStatus.value).forEach(k=>delete processingStatus.value[k]);Object.keys(testLoadingStatus.value).forEach(k=>delete testLoadingStatus.value[k]);currentPage.value=1;total.value=0;activePage.value='main'}
 
-const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){maxConcurrentTasks.value=r.data.maxConcurrentTasks;savedMaxConcurrentTasks.value=r.data.maxConcurrentTasks;defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz;if(r.data.schedulingMode)schedulingMode.value=r.data.schedulingMode}startStatusRefresh()}catch(e){}}
+const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz;if(r.data.schedulingMode)schedulingMode.value=r.data.schedulingMode}startStatusRefresh()}catch(e){}}
 
 const loadTrainingRecords=async()=>{try{const oldRecords=[...trainingRecords.value];trainingRecords.value=(await api.value.get('/api/training-records')).data;checkStatusChanges(oldRecords,trainingRecords.value)}catch(e){}}
 const loadUsers=async()=>{try{const params={};if(userSearch.value)params.search=userSearch.value;if(userRoleFilter.value)params.role=userRoleFilter.value;userList.value=(await api.value.get('/api/users',{params})).data}catch(e){}}
@@ -320,13 +312,9 @@ const fetchFilteredLogs=async()=>{logPage.value=1;await loadOperationLogs()}
 const resetLogFilter=()=>{logFilter.username='';logFilter.action='';logFilter.startTime='';logFilter.endTime='';logPage.value=1;loadOperationLogs()}
 const fetchFilteredUsers=async()=>{await loadUsers()}
 
-const getActionTagType=(action)=>{const map={ADD_DATASET:'success',PREPROCESS:'warning',TRAIN:'primary',TEST:'primary',SAVE_MODEL:'success',DELETE_DATASET:'danger',DELETE_RECORD:'danger',CONFIG_CHANGE:'info',CREATE_USER:'success',UPDATE_ROLE:'warning',DELETE_USER:'danger',CHANGE_PASSWORD:'warning'};return map[action]||'info'}
-
-const handleAddDataset=async()=>{if(!form.inputDir){showMsg('请输入数据集名称或路径','warning');return}const id=form.inputDir.trim().replace(/^["']|["']$/g,'');if(!id){showMsg('输入不能为空','warning');return}currentStep.value='addDataset';try{await api.value.post('/api/datasets',{inputDir:id});await refreshDatasets();await loadTrainingRecords();showMsg(`数据集添加成功`)}catch(e){showMsg(`失败: ${e.response?.data?.message||e.message}`,'error')}finally{currentStep.value='';form.inputDir=''}}
+const getActionTagType=(action)=>{const map={ADD_DATASET:'success',UPLOAD_DATASET:'success',PREPROCESS:'warning',TRAIN:'primary',TEST:'primary',SAVE_MODEL:'success',DELETE_DATASET:'danger',DELETE_RECORD:'danger',CONFIG_CHANGE:'info',CREATE_USER:'success',UPDATE_ROLE:'warning',DELETE_USER:'danger',CHANGE_PASSWORD:'warning'};return map[action]||'info'}
 
 const handleDrop=async(e)=>{isDragOver.value=false;const files=e.dataTransfer.files;if(!files||files.length===0)return;for(let i=0;i<files.length;i++){const f=files[i];if(f.name.endsWith('.zip')){await handleFileUpload(f)}else{showMsg('请上传 ZIP 格式文件','warning')}}}
-
-const browseFolder=async(title,target)=>{browsePvcFolder(target)}
 
 const handlePreprocessDataset=async(dataName)=>{processingStatus.value[dataName]=true;preprocessLogs.value[dataName]=`正在预处理 ${dataName}...\n`;try{const r=await api.value.post('/api/preprocess',{dataName});showMsg('预处理任务已启动');pollPreprocess(r.data.jobId,dataName)}catch(e){preprocessLogs.value[dataName]+=`错误: ${e.message}\n`;showMsg('预处理失败','error');processingStatus.value[dataName]=false}}
 
@@ -340,7 +328,7 @@ const handleTrainPending=async(dataName,pending)=>{const rn=`${dataName}-e${pend
 
 const handleTestRecord=async(rec)=>{testLogs.value[rec.recordName]='';testLoadingStatus.value[rec.recordName]=true;try{const r=await api.value.post('/api/test',{dataName:rec.dataName,imgsz:rec.imgsz,recordName:rec.recordName});showMsg('测试任务已启动');await loadTrainingRecords();connectLogWebSocket(rec.recordName,'test');startStatusRefresh()}catch(e){testLogs.value[rec.recordName]=`错误: ${e.message}\n`;testLoadingStatus.value[rec.recordName]=false}}
 
-const connectLogWebSocket=(recordName,type)=>{const logKey=recordName+'-'+type;if(wsConnections.has(logKey)){const old=wsConnections.get(logKey);if(old.readyState===WebSocket.OPEN||old.readyState===WebSocket.CONNECTING)return}const wsUrl=`ws://${window.location.host}/ws/logs/${recordName}/${type}`;const ws=new WebSocket(wsUrl);ws.onopen=()=>{console.log(`WebSocket connected: ${logKey}`)};ws.onmessage=(event)=>{if(type==='train'){trainLogs.value[recordName]=(trainLogs.value[recordName]||'')+event.data}else if(type==='test'){testLogs.value[recordName]=(testLogs.value[recordName]||'')+event.data}autoScroll(recordName,type)};ws.onclose=()=>{wsConnections.delete(logKey);refreshDatasets();loadTrainingRecords()};ws.onerror=()=>{wsConnections.delete(logKey)};wsConnections.set(logKey,ws)}
+const connectLogWebSocket=(recordName,type)=>{const logKey=recordName+'-'+type;if(wsConnections.has(logKey)){const old=wsConnections.get(logKey);if(old.readyState===WebSocket.OPEN||old.readyState===WebSocket.CONNECTING)return}const wsUrl=`ws://${window.location.host}/ws/logs/${recordName}/${type}`;const ws=new WebSocket(wsUrl);ws.onopen=()=>{};ws.onmessage=(event)=>{if(type==='train'){trainLogs.value[recordName]=(trainLogs.value[recordName]||'')+event.data}else if(type==='test'){testLogs.value[recordName]=(testLogs.value[recordName]||'')+event.data}autoScroll(recordName,type)};ws.onclose=()=>{wsConnections.delete(logKey);refreshDatasets();loadTrainingRecords()};ws.onerror=()=>{wsConnections.delete(logKey)};wsConnections.set(logKey,ws)}
 
 const handleViewTrainLog=async(rec)=>{const rn=rec.recordName;try{if(rec.trainStatus==='RUNNING'||rec.trainStatus==='QUEUED'){connectLogWebSocket(rn,'train')}else{const r=await api.value.get(`/api/training-records/${rn}/train-log`);if(r.data.log)trainLogs.value[rn]=r.data.log;scrollToBottomNow(rn,'train')}}catch(e){trainLogs.value[rn]=`获取日志失败: ${e.message}`}}
 
@@ -372,7 +360,6 @@ const confirmDelete=async()=>{try{const dn=datasetToDelete.value;const recs=trai
 const handleCleanup=()=>{cleanupConfirmVisible.value=true}
 const confirmCleanup=async()=>{cleanupLoading.value=true;try{await api.value.post('/api/cleanup');await refreshDatasets();await loadTrainingRecords();await loadOperationLogs();showMsg('系统已重置');stopAllWs();Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k])}catch(e){showMsg(e.response?.data?.message||'清理失败','error')}finally{cleanupLoading.value=false;cleanupConfirmVisible.value=false}}
 
-const handleMaxConcurrentTasksChange=async(v)=>{try{await api.value.post('/api/scheduler/max-concurrent',{max:v});savedMaxConcurrentTasks.value=v;showMsg(`同时训练数已设为 ${v}`)}catch(e){showMsg('更新失败','error')}}
 const handleDefaultEpochsChange=async(v)=>{try{await api.value.post('/api/scheduler/default-epochs',{epochs:v});savedDefaultEpochs.value=v;showMsg(`默认Epochs已设为 ${v}`)}catch(e){showMsg('更新失败','error')}}
 const handleDefaultImgszChange=async(v)=>{try{await api.value.post('/api/scheduler/default-imgsz',{imgsz:v});savedDefaultImgsz.value=v;showMsg(`默认Imgsz已设为 ${v}`)}catch(e){showMsg('更新失败','error')}}
 
@@ -400,18 +387,18 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 
 <style scoped>
 .login-page{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);position:relative}
-.login-card{background:rgba(255,255,255,.95);border-radius:16px;padding:40px;width:380px;box-shadow:0 20px 60px rgba(0,0,0,.3);z-index:1}
+.login-card{background:rgba(255,255,255,.95);border-radius:16px;padding:40px;width:min(380px,90vw);box-shadow:0 20px 60px rgba(0,0,0,.3);z-index:1}
 .login-header{text-align:center;margin-bottom:30px}.login-header h2{margin:12px 0 0;color:#303133}
 .login-error{color:#f56c6c;text-align:center;margin-top:12px;font-size:13px}
 
 .app-layout{display:flex;min-height:100vh;background:#f0f2f5;position:relative}
 .bg-decoration{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:0;overflow:hidden}
-.bg-circle{position:absolute;border-radius:50%;opacity:.06}.bg-circle-1{width:600px;height:600px;background:#409eff;top:-200px;right:-100px}.bg-circle-2{width:400px;height:400px;background:#67c23a;bottom:-100px;left:-80px}.bg-circle-3{width:300px;height:300px;background:#e6a23c;top:50%;left:50%;transform:translate(-50%,-50%)}
+.bg-circle{position:absolute;border-radius:50%;opacity:.06}.bg-circle-1{width:min(600px,50vw);height:min(600px,50vw);background:#409eff;top:-200px;right:-100px}.bg-circle-2{width:min(400px,35vw);height:min(400px,35vw);background:#67c23a;bottom:-100px;left:-80px}.bg-circle-3{width:min(300px,25vw);height:min(300px,25vw);background:#e6a23c;top:50%;left:50%;transform:translate(-50%,-50%)}
 
-.sidebar{width:200px;background:linear-gradient(180deg,#1a1a2e,#16213e);color:#fff;display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:10;box-shadow:2px 0 12px rgba(0,0,0,.15)}
+.sidebar{width:clamp(160px,15vw,200px);background:linear-gradient(180deg,#1a1a2e,#16213e);color:#fff;display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:10;box-shadow:2px 0 12px rgba(0,0,0,.15)}
 .sidebar-logo{display:flex;align-items:center;gap:10px;padding:20px 18px;border-bottom:1px solid rgba(255,255,255,.1)}
 .logo-icon{width:36px;height:36px;background:linear-gradient(135deg,#409eff,#67c23a);border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:18px;font-weight:800;flex-shrink:0}
-.logo-text{font-size:18px;font-weight:700;letter-spacing:1px}
+.logo-text{font-size:clamp(14px,1.5vw,18px);font-weight:700;letter-spacing:1px}
 .sidebar-nav{flex:1;padding:12px 0}
 .nav-item{display:flex;align-items:center;gap:10px;padding:12px 20px;cursor:pointer;transition:all .2s;color:rgba(255,255,255,.65);font-size:14px;border-left:3px solid transparent}
 .nav-item:hover{background:rgba(255,255,255,.08);color:#fff}
@@ -420,25 +407,29 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 .user-badge{display:flex;align-items:center;gap:6px;margin-bottom:8px}.user-name{font-size:13px;color:rgba(255,255,255,.8)}
 .footer-actions{display:flex;gap:6px}
 
-.main-content{margin-left:200px;flex:1;padding:20px 28px;position:relative;z-index:1;min-height:100vh}
-.page-header{margin-bottom:18px}.page-header h2{margin:0;font-size:20px;color:#303133;font-weight:700}
+.main-content{margin-left:clamp(160px,15vw,200px);flex:1;padding:clamp(12px,2vw,28px);position:relative;z-index:1;min-height:100vh;box-sizing:border-box}
+.page-header{margin-bottom:18px}.page-header h2{margin:0;font-size:clamp(16px,2vw,20px);color:#303133;font-weight:700}
 
-.top-section{display:flex;gap:14px;margin-bottom:16px}.top-card{flex:1;min-width:0}
-.dataset-card-top{flex:3}.config-card-top{flex:2}
+.top-section{display:flex;gap:14px;margin-bottom:16px;flex-wrap:wrap}
+.top-card{flex:1;min-width:min(300px,100%)}
+.upload-card{flex:3;min-width:min(400px,100%)}
+.config-card{flex:2;min-width:min(250px,100%)}
 .card-title{font-size:15px;font-weight:600;color:#303133}
-.input-row{display:flex;align-items:center;gap:10px}.input-flex{flex:1}
-.config-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.cfg-item{display:flex;align-items:center;gap:5px}.cfg-label{font-size:12px;color:#606266;white-space:nowrap}
 
-.drop-zone{margin-top:10px;border:2px dashed #c0c4cc;border-radius:8px;padding:16px;text-align:center;transition:all .3s;cursor:pointer}
-.drop-zone:hover{border-color:#409eff;background:rgba(64,158,255,.04)}
-.drop-zone-active{border-color:#409eff;background:rgba(64,158,255,.08)}
-.drop-zone-text{display:flex;align-items:center;justify-content:center;gap:8px;color:#909399;font-size:13px}
+.upload-area{border:2px dashed #c0c4cc;border-radius:12px;padding:clamp(20px,3vw,40px) clamp(16px,2vw,30px);text-align:center;transition:all .3s;cursor:pointer}
+.upload-area:hover{border-color:#409eff;background:rgba(64,158,255,.04)}
+.upload-area-active{border-color:#409eff;background:rgba(64,158,255,.08)}
+.upload-icon{color:#409eff;margin-bottom:8px}
+.upload-hint{font-size:15px;color:#606266;margin:8px 0 4px}
+.upload-sub{font-size:13px;color:#909399;margin:8px 0}
+
+.config-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.cfg-item{display:flex;align-items:center;gap:5px}.cfg-label{font-size:12px;color:#606266;white-space:nowrap}.cfg-value{font-size:18px;font-weight:700;color:#409eff}.cfg-hint{font-size:11px;color:#909399}
 
 .datasets-section{margin-bottom:16px}.dataset-card{margin-bottom:12px}
 .dataset-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #ebeef5;flex-wrap:wrap;gap:8px}
 .dataset-info{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .dataset-name{font-size:15px;font-weight:700;color:#303133}
-.header-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.header-actions{display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap}
 
 .records-table{width:100%;border-collapse:collapse;font-size:13px;table-layout:auto}
 .records-table th{background:#f5f7fa;padding:7px 4px;text-align:center;font-weight:600;color:#606266;border:1px solid #ebeef5;white-space:nowrap}
@@ -448,7 +439,7 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 .record-actions{display:flex;gap:3px;justify-content:center;flex-wrap:wrap}
 .pagination-container{display:flex;justify-content:center;margin-top:16px}
 
-.logs-section{margin-bottom:16px}.log-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(480px,1fr));gap:14px}
+.logs-section{margin-bottom:16px}.log-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(480px,100%),1fr));gap:14px}
 .log-item{border:1px solid #dcdfe6;border-radius:8px;overflow:hidden}
 .log-header{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;background:#f5f7fa;border-bottom:1px solid #dcdfe6}
 .log-container{max-height:350px;overflow-y:auto;padding:10px 14px;background:#fff}
@@ -462,17 +453,18 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 .fixed-table{width:100%}
 
 .cluster-overview{display:flex;gap:12px;flex-wrap:wrap}
-.overview-card{flex:1;min-width:120px;text-align:center;padding:8px 0}
-.overview-value{font-size:28px;font-weight:800;color:#303133}
+.overview-card{flex:1;min-width:min(120px,45%);text-align:center;padding:8px 0}
+.overview-value{font-size:clamp(22px,3vw,28px);font-weight:800;color:#303133}
 .overview-label{font-size:12px;color:#909399;margin-top:4px}
 .overview-ready .overview-value{color:#67c23a}
 .overview-gpu .overview-value{color:#e6a23c}
-.overview-master .overview-value{color:#409eff}
-.overview-worker .overview-value{color:#909399}
+.overview-concurrent .overview-value{color:#409eff}
+
+.node-concurrent{display:flex;align-items:center;gap:4px;justify-content:center}
 
 :deep(.el-card){border-radius:12px;border:none}:deep(.el-card__header){padding:12px 18px;border-bottom:1px solid #ebeef5}:deep(.el-card__body){padding:14px 18px}
 :deep(.el-table){font-size:13px}:deep(.el-table th.el-table__cell){background-color:#f5f7fa!important;text-align:center!important}:deep(.el-dialog){border-radius:12px}
 
-@media(max-width:1000px){.top-section{flex-direction:column}.dataset-card-top,.config-card-top{flex:auto}.config-row{gap:8px}}
-@media(max-width:800px){.main-content{padding:10px;margin-left:180px}.log-grid{grid-template-columns:1fr}.input-row{flex-wrap:wrap}.filter-row{gap:8px}}
+@media(max-width:900px){.top-section{flex-direction:column}.upload-card,.config-card{flex:auto;min-width:100%}.cluster-overview .overview-card{min-width:45%}.filter-row{gap:8px}}
+@media(max-width:700px){.sidebar{width:60px}.sidebar-logo .logo-text,.nav-item span,.user-badge .user-name,.footer-actions .el-button span{display:none}.sidebar-logo{justify-content:center;padding:16px 8px}.nav-item{justify-content:center;padding:14px 8px}.main-content{margin-left:60px;padding:10px}.log-grid{grid-template-columns:1fr}.header-actions{flex-wrap:wrap}}
 </style>

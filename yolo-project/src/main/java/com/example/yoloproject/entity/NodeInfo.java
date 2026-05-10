@@ -48,6 +48,9 @@ public class NodeInfo {
     @Column
     private Boolean schedulable = true;
 
+    @Column(name = "max_concurrent_tasks")
+    private Integer maxConcurrentTasks = 1;
+
     @Column(length = 2000)
     private String labels;
 
@@ -116,4 +119,7 @@ public class NodeInfo {
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+
+    public Integer getMaxConcurrentTasks() { return maxConcurrentTasks; }
+    public void setMaxConcurrentTasks(Integer maxConcurrentTasks) { this.maxConcurrentTasks = maxConcurrentTasks; }
 }

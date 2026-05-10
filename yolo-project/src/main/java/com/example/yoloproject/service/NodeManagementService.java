@@ -204,6 +204,15 @@ public class NodeManagementService {
         return false;
     }
 
+    public NodeInfo setNodeMaxConcurrent(String nodeName, int maxConcurrent) {
+        NodeInfo node = nodeInfoRepository.findByNodeName(nodeName).orElse(null);
+        if (node == null) {
+            throw new IllegalArgumentException("节点不存在: " + nodeName);
+        }
+        node.setMaxConcurrentTasks(maxConcurrent);
+        return nodeInfoRepository.save(node);
+    }
+
     public Map<String, Object> getClusterOverview() {
         Map<String, Object> overview = new HashMap<>();
         List<NodeInfo> allNodes = nodeInfoRepository.findAll();

@@ -89,32 +89,6 @@ public class SchedulerController {
         }
     }
 
-    @PostMapping("/max-concurrent")
-    public ResponseEntity<Map<String, String>> setMaxConcurrentTasks(@RequestBody Map<String, Object> request, HttpServletRequest httpRequest) {
-        Integer max = ((Number) request.get("max")).intValue();
-        String username = (String) httpRequest.getAttribute("username");
-        Map<String, String> response = new HashMap<>();
-
-        try {
-            schedulerService.setMaxConcurrentTasks(max);
-            authService.logOperation(null, username, "CONFIG_CHANGE", "maxConcurrent", "同时训练数更新为: " + max);
-            response.put("message", "最大同时训练数已更新为: " + max);
-            response.put("status", "success");
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            response.put("message", e.getMessage());
-            response.put("status", "error");
-            return ResponseEntity.badRequest().body(response);
-        }
-    }
-
-    @GetMapping("/max-concurrent")
-    public ResponseEntity<Map<String, Object>> getMaxConcurrentTasks() {
-        Map<String, Object> response = new HashMap<>();
-        response.put("max", schedulerService.getMaxConcurrentTasks());
-        return ResponseEntity.ok(response);
-    }
-
     @PostMapping("/default-epochs")
     public ResponseEntity<Map<String, String>> setDefaultEpochs(@RequestBody Map<String, Object> request, HttpServletRequest httpRequest) {
         Integer epochs = ((Number) request.get("epochs")).intValue();

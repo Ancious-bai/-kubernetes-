@@ -130,6 +130,39 @@ public class NodeController {
         return ResponseEntity.ok(response);
     }
 
+    @PostMapping("/{nodeName}/max-concurrent")
+    public ResponseEntity<Map<String, String>> setNodeMaxConcurrent(
+            @PathVariable String nodeName,
+            @RequestBody Map<String, Object> request,
+            HttpServletRequest httpRequest) {
+        String role = (String) httpRequest.getAttribute("role");
+        String username = (String) httpRequest.getAttribute("username");
+        if (!"ROOT".equals(role) && !"ADMIN".equals(role)) {
+            return ResponseEntity.status(403).build();
+        }
+        Integer maxConcurrent = ((Number) request.get("maxConcurrent")).intValue();
+        if (maxConcurrent < 1 || maxConcurrent > 10) {
+            Map<String, String> response = new HashMap<>();
+            response.put("message", "并发数必须在1-10之间");
+            response.put("status", "error");
+            return ResponseEntity.badRequest().body(response);
+        }
+        try {
+            nodeManagementService.setNodeMaxConcurrent(nodeName, maxConcurrent);
+            authService.logOperation(null, username, "CONFIG_CHANGE", nodeName,
+                    "节点 " + nodeName + " 最大并发数设为: " + maxConcurrent);
+            Map<String, String> response = new HashMap<>();
+            response.put("message", "节点 " + nodeName + " 最大并发数已设为 " + maxConcurrent);
+            response.put("status", "success");
+            return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            Map<String, String> response = new HashMap<>();
+            response.put("message", e.getMessage());
+            response.put("status", "error");
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
+
     @GetMapping("/select-for-training")
     public ResponseEntity<Map<String, Object>> selectNodeForTraining(
             @RequestParam(required = false) String gpuType,
