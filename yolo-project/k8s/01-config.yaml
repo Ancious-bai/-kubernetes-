@@ -19,7 +19,7 @@ metadata:
   namespace: yolo-system
 data:
   PROJECT_ROOT: "/app/data"
-  TRAINING_IMAGE: "<REGISTRY>/yolov8-trainer:v1.0.0"
+  TRAINING_IMAGE: "docker.io/ancious/yolov8-trainer:v1.0.0"
   PVC_NAME: "yolo-workspace"
   MOUNT_PATH: "/app/data"
   USE_PVC: "true"

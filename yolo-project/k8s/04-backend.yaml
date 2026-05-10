@@ -16,8 +16,8 @@ spec:
       serviceAccountName: yolo-scheduler
       containers:
         - name: backend
-          image: <REGISTRY>/yolo-backend:v1.0.0
-          imagePullPolicy: Always
+          image: docker.io/ancious/yolo-backend:v1.0.0
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
           envFrom:

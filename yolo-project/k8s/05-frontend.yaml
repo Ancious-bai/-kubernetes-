@@ -15,8 +15,8 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: <REGISTRY>/yolo-frontend:v1.0.0
-          imagePullPolicy: Always
+          image: docker.io/ancious/yolo-frontend:v1.0.0
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
           resources:
