@@ -18,7 +18,7 @@ public class NodeInfo {
     @Column
     private String nodeIp;
 
-    @Column(length = 1000)
+    @Column
     private String roles;
 
     @Column
@@ -51,7 +51,7 @@ public class NodeInfo {
     @Column(name = "max_concurrent_tasks")
     private Integer maxConcurrentTasks = 1;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(length = 2000)
     private String labels;
 
     @Column
