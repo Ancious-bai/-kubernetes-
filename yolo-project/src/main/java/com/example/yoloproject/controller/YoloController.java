@@ -102,6 +102,7 @@ public class YoloController {
             }
 
             Dataset dataset = new Dataset(dataName, workspaceDir + dataName, username);
+            dataset.setSizeBytes(file.getSize());
             datasetRepository.save(dataset);
 
             authService.logOperation(null, username, "UPLOAD_DATASET", dataName, "上传数据集: " + originalFilename);
@@ -338,8 +339,10 @@ public class YoloController {
 
         if ("ROOT".equals(role)) {
         } else if ("ADMIN".equals(role)) {
+            List<String> visibleUsers = authService.getUsersForAdmin(username).stream()
+                    .map(u -> u.getUsername()).collect(Collectors.toList());
             allDatasets = allDatasets.stream()
-                    .filter(d -> username.equals(d.getCreatedBy()) || "USER".equals(getCreatorRole(d.getCreatedBy())))
+                    .filter(d -> visibleUsers.contains(d.getCreatedBy()))
                     .collect(Collectors.toList());
         } else {
             allDatasets = allDatasets.stream()
@@ -348,14 +351,6 @@ public class YoloController {
         }
 
         return ResponseEntity.ok(allDatasets);
-    }
-
-    private String getCreatorRole(String username) {
-        try {
-            return authService.getUserByUsername(username).getRole();
-        } catch (Exception e) {
-            return "USER";
-        }
     }
 
     @GetMapping("/model/download")
@@ -487,7 +482,6 @@ public class YoloController {
         String dataName = (String) request.get("dataName");
         int epochs = request.get("epochs") != null ? ((Number) request.get("epochs")).intValue() : 2;
         int imgsz = request.get("imgsz") != null ? ((Number) request.get("imgsz")).intValue() : 640;
-        int priority = request.get("priority") != null ? ((Number) request.get("priority")).intValue() : 5;
         String username = (String) httpRequest.getAttribute("username");
 
         String recordName = dataName + "-e" + epochs + "-i" + imgsz;
@@ -501,7 +495,6 @@ public class YoloController {
 
         TrainingRecord record = new TrainingRecord(dataName, epochs, imgsz, username != null ? username : "system");
         record.setTrainStatus("IDLE");
-        record.setPriority(priority);
         trainingRecordRepository.save(record);
 
         Map<String, Object> response = new HashMap<>();
@@ -517,8 +510,14 @@ public class YoloController {
         String username = (String) httpRequest.getAttribute("username");
 
         List<TrainingRecord> records;
-        if ("ROOT".equals(role) || "ADMIN".equals(role)) {
+        if ("ROOT".equals(role)) {
             records = trainingRecordRepository.findAll();
+        } else if ("ADMIN".equals(role)) {
+            List<String> visibleUsers = authService.getUsersForAdmin(username).stream()
+                    .map(u -> u.getUsername()).collect(Collectors.toList());
+            records = trainingRecordRepository.findAll().stream()
+                    .filter(r -> visibleUsers.contains(r.getCreatedBy()))
+                    .collect(Collectors.toList());
         } else {
             records = trainingRecordRepository.findByCreatedBy(username);
         }

@@ -26,7 +26,6 @@ public class SchedulerController {
         String dataName = (String) request.get("dataName");
         Integer epochs = request.get("epochs") != null ? ((Number) request.get("epochs")).intValue() : null;
         Integer imgsz = request.get("imgsz") != null ? ((Number) request.get("imgsz")).intValue() : null;
-        Integer priority = request.get("priority") != null ? ((Number) request.get("priority")).intValue() : null;
         String username = (String) httpRequest.getAttribute("username");
 
         String targetNode = (String) request.get("targetNode");
@@ -36,7 +35,7 @@ public class SchedulerController {
         Map<String, String> response = new HashMap<>();
 
         try {
-            schedulerService.addTask(dataName, epochs, imgsz, username, priority,
+            schedulerService.addTask(dataName, epochs, imgsz, username,
                     targetNode, nodeSelector, gpuResources);
             int e = epochs != null && epochs > 0 ? epochs : 2;
             int i = imgsz != null && imgsz > 0 ? imgsz : 640;
@@ -62,24 +61,6 @@ public class SchedulerController {
         try {
             schedulerService.removeTask(recordName);
             response.put("message", "任务已从队列移除");
-            response.put("status", "success");
-            return ResponseEntity.ok(response);
-        } catch (IllegalArgumentException e) {
-            response.put("message", e.getMessage());
-            response.put("status", "error");
-            return ResponseEntity.badRequest().body(response);
-        }
-    }
-
-    @PostMapping("/priority")
-    public ResponseEntity<Map<String, String>> updatePriority(@RequestBody Map<String, Object> request) {
-        String recordName = (String) request.get("recordName");
-        Integer priority = ((Number) request.get("priority")).intValue();
-        Map<String, String> response = new HashMap<>();
-
-        try {
-            schedulerService.updatePriority(recordName, priority);
-            response.put("message", "优先级已更新");
             response.put("status", "success");
             return ResponseEntity.ok(response);
         } catch (IllegalArgumentException e) {

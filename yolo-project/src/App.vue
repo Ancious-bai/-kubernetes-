@@ -19,7 +19,8 @@
       <div class="sidebar-logo"><div class="logo-icon">Y</div><span class="logo-text">YOLO</span></div>
       <nav class="sidebar-nav">
         <div class="nav-item" :class="{active:activePage==='main'}" @click="activePage='main'"><el-icon><Monitor /></el-icon><span>训练管理</span></div>
-        <div class="nav-item" :class="{active:activePage==='nodes'}" @click="switchToNodes"><el-icon><Coin /></el-icon><span>节点管理</span></div>
+        <div class="nav-item" :class="{active:activePage==='nodes'}" @click="switchToNodes"><el-icon><Coin /></el-icon><span>节点信息</span></div>
+        <div class="nav-item" :class="{active:activePage==='models'}" @click="switchToModels"><el-icon><Box /></el-icon><span>模型库</span></div>
         <div class="nav-item" :class="{active:activePage==='logs'}" @click="switchToLogs"><el-icon><Document /></el-icon><span>操作日志</span></div>
         <div class="nav-item" v-if="isAdmin" :class="{active:activePage==='users'}" @click="switchToUsers"><el-icon><UserFilled /></el-icon><span>用户管理</span></div>
       </nav>
@@ -38,11 +39,10 @@
           <el-card shadow="hover" class="top-card upload-card">
             <template #header><span class="card-title">上传数据集</span></template>
             <div class="upload-area" :class="{'upload-area-active':isDragOver}" @dragover.prevent="isDragOver=true" @dragleave.prevent="isDragOver=false" @drop.prevent="handleDrop">
-              <el-icon size="40" class="upload-icon"><UploadFilled /></el-icon>
+              <el-icon size="28" class="upload-icon"><UploadFilled /></el-icon>
               <p class="upload-hint">拖拽 ZIP 文件到此处</p>
-              <p class="upload-sub">或</p>
               <el-upload :show-file-list="false" :before-upload="handleFileUpload" accept=".zip" :disabled="currentStep==='addDataset'">
-                <el-button type="primary" size="large" :loading="currentStep==='addDataset'">点击选择 ZIP 文件</el-button>
+                <el-button type="primary" size="default" :loading="currentStep==='addDataset'">点击选择 ZIP 文件</el-button>
               </el-upload>
             </div>
           </el-card>
@@ -62,10 +62,9 @@
               <div class="header-actions"><el-button size="small" type="primary" plain @click="addPendingRecord(ds.name)">+ 新增训练</el-button><el-button size="small" type="danger" @click="handleDeleteDataset(ds.name)">删除数据集</el-button></div>
             </div>
             <div class="dataset-records" style="overflow-x:auto">
-              <table class="records-table"><thead><tr><th class="col-priority">优先级</th><th class="col-epoch">Epochs</th><th class="col-imgsz">Imgsz</th><th class="col-node">运行节点</th><th class="col-tstatus">训练状态</th><th class="col-estatus">测试状态</th><th class="col-action">操作</th></tr></thead>
+              <table class="records-table"><thead><tr><th class="col-epoch">Epochs</th><th class="col-imgsz">Imgsz</th><th class="col-node">运行节点</th><th class="col-tstatus">训练状态</th><th class="col-estatus">测试状态</th><th class="col-action">操作</th></tr></thead>
                 <tbody>
                   <tr v-for="rec in getDatasetRecords(ds.name)" :key="rec.recordName">
-                    <td><el-input-number v-if="isEditable(rec)" v-model="rec.priority" :min="1" :max="10" size="small" style="width:72px" /><span v-else class="param-fixed">{{ rec.priority||5 }}</span></td>
                     <td><span class="param-fixed">{{ rec.epochs }}</span></td>
                     <td><span class="param-fixed">{{ rec.imgsz }}</span></td>
                     <td><el-tag v-if="rec.targetNode" size="small" type="primary">{{ rec.targetNode }}</el-tag><span v-else class="param-fixed" style="color:#909399">-</span></td>
@@ -77,11 +76,12 @@
                       <el-button v-if="rec.trainStatus==='COMPLETED'" size="small" type="success" @click="showSaveModelDialog(rec)">保存模型</el-button>
                       <el-button v-if="rec.trainStatus==='COMPLETED' && rec.testStatus!=='COMPLETED' && rec.testStatus!=='RUNNING'" size="small" type="success" @click="handleTestRecord(rec)">测试</el-button>
                       <el-button v-if="hasTestLog(rec)" size="small" plain @click="handleViewTestLog(rec)">测试日志</el-button>
+                      <el-button v-if="rec.trainStatus==='COMPLETED'" size="small" type="info" plain @click="viewRunsResult(rec.recordName,'train')">训练结果</el-button>
+                      <el-button v-if="rec.testStatus==='COMPLETED'" size="small" type="info" plain @click="viewRunsResult(rec.recordName,'test')">测试结果</el-button>
                       <el-button size="small" type="danger" @click="handleDeleteRecord(rec)">删除</el-button>
                     </div></td>
                   </tr>
                   <tr v-for="pending in getPendingRecords(ds.name)" :key="pending.key">
-                    <td><el-input-number v-model="pending.priority" :min="1" :max="10" size="small" style="width:72px" /></td>
                     <td><el-input-number v-model="pending.epochs" :min="1" :max="1000" size="small" style="width:72px" /></td>
                     <td><el-input-number v-model="pending.imgsz" :min="32" :max="1280" :step="32" size="small" style="width:90px" /></td>
                     <td><el-select v-model="pending.scheduleMode" size="small" style="width:90px" @change="v=>{if(v==='auto')pending.targetNode=''}"><el-option label="自动调度" value="auto" /><el-option label="指定节点" value="manual" /></el-select><el-select v-if="pending.scheduleMode==='manual'" v-model="pending.targetNode" size="small" style="width:90px;margin-left:4px" placeholder="选择节点"><el-option v-for="n in schedulableNodes" :key="n.nodeName" :label="n.nodeName" :value="n.nodeName" /></el-select></td>
@@ -103,7 +103,7 @@
         </div>
         <div class="logs-section" v-if="Object.keys(trainLogs).length">
           <el-card shadow="hover"><template #header><span class="card-title">训练日志</span></template>
-            <div class="log-grid"><div v-for="(log,name) in trainLogs" :key="'train-'+name" class="log-item"><div class="log-header"><el-tag size="small" type="warning">{{ name }}</el-tag><el-button type="danger" size="small" link @click="closeTrainLog(name)">关闭</el-button></div><div class="log-container" :ref="el=>setLogRef(name,'train',el)"><div class="log-content train-log-structured"><div v-if="parseTrainLog(log).status==='queued'" class="tl-status">⏳ 排队中，等待资源分配...</div><div v-else-if="parseTrainLog(log).status==='waiting'" class="tl-status">⏳ 等待训练启动...</div><template v-else><pre v-if="parseTrainLog(log).header" class="tl-header">{{ parseTrainLog(log).header }}</pre><div v-if="parseTrainLog(log).progress" class="tl-progress">🔄 Epoch {{ parseTrainLog(log).progress.e }}: <span class="tl-pct">{{ parseTrainLog(log).progress.pct }}%</span> | box_loss: {{ parseTrainLog(log).progress.box }}  cls_loss: {{ parseTrainLog(log).progress.cls }}  dfl_loss: {{ parseTrainLog(log).progress.dfl }}</div><div v-else-if="parseTrainLog(log).rows.length===0" class="tl-status">🔄 训练中，等待第1轮epoch完成...</div><table v-if="parseTrainLog(log).rows.length>0" class="tl-table"><tr><th>Epoch</th><th>Class</th><th>Images</th><th>Instances</th><th>Box(P)</th><th>R</th><th>mAP50</th><th>mAP50-95</th></tr><tr v-for="r in parseTrainLog(log).rows" :key="r.e" :class="{'tl-best':r.e==='best'}"><td>{{ r.e }}</td><td>all</td><td>{{ r.i }}</td><td>{{ r.n }}</td><td>{{ r.p }}</td><td>{{ r.r }}</td><td>{{ r.m5 }}</td><td>{{ r.m9 }}</td></tr></table></template></div></div></div></div>
+            <div class="log-grid"><div v-for="(log,name) in trainLogs" :key="'train-'+name" class="log-item"><div class="log-header"><el-tag size="small" type="warning">{{ name }}</el-tag><el-button type="danger" size="small" link @click="closeTrainLog(name)">关闭</el-button></div><div class="log-container" :ref="el=>setLogRef(name,'train',el)"><pre class="log-content">{{ log }}</pre></div></div></div>
           </el-card>
         </div>
         <div class="logs-section" v-if="Object.keys(testLogs).length">
@@ -111,6 +111,38 @@
             <div class="log-grid"><div v-for="(log,name) in testLogs" :key="'test-'+name" class="log-item"><div class="log-header"><el-tag size="small" type="success">{{ name }}</el-tag><el-button type="danger" size="small" link @click="closeTestLog(name)">关闭</el-button></div><div class="log-container" :ref="el=>setLogRef(name,'test',el)"><pre class="log-content">{{ log }}</pre></div></div></div>
           </el-card>
         </div>
+      </div>
+
+      <div v-show="activePage==='models'" class="page-models">
+        <div class="page-header" style="display:flex;justify-content:space-between;align-items:center"><h2>模型库</h2></div>
+
+        <el-card shadow="hover" style="margin-top:14px">
+          <div style="overflow-x:auto">
+            <table class="records-table">
+              <thead><tr>
+                <th>模型名称</th><th>数据集</th><th>类型</th><th>Epochs</th><th>Imgsz</th><th>mAP50</th><th>mAP50-95</th><th>提交者</th><th>创建时间</th><th>操作</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="m in modelList" :key="m.id">
+                  <td><span style="font-weight:600">{{ m.modelName }}</span></td>
+                  <td><span>{{ m.dataName }}</span></td>
+                  <td><el-tag :type="m.modelType==='best'?'success':'info'" size="small">{{ m.modelType }}</el-tag></td>
+                  <td><span>{{ m.epochs }}</span></td>
+                  <td><span>{{ m.imgsz }}</span></td>
+                  <td><span v-if="m.map50!=null">{{ (m.map50*100).toFixed(1) }}%</span><span v-else>-</span></td>
+                  <td><span v-if="m.map5095!=null">{{ (m.map5095*100).toFixed(1) }}%</span><span v-else>-</span></td>
+                  <td><span>{{ m.createdBy }}</span></td>
+                  <td><span class="param-fixed">{{ m.createdAt }}</span></td>
+                  <td><div class="record-actions">
+                    <el-button size="small" type="primary" @click="showPredictDialog(m)">推理</el-button>
+                    <el-button v-if="m.createdBy===currentUser.username||currentUser.role==='ROOT'" size="small" type="danger" @click="handleDeleteModel(m)">删除</el-button>
+                  </div></td>
+                </tr>
+                <tr v-if="!modelList.length"><td colspan="10" style="color:#909399">暂无模型，训练完成后保存模型到模型库</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </el-card>
       </div>
 
       <div v-show="activePage==='logs'" class="page-logs">
@@ -165,6 +197,7 @@
               <thead><tr>
                 <th class="col-uuser">用户名</th>
                 <th class="col-urole">角色</th>
+                <th class="col-ucreator">创建者</th>
                 <th class="col-utime">创建时间</th>
                 <th class="col-uact">操作</th>
               </tr></thead>
@@ -172,8 +205,9 @@
                 <tr v-for="row in filteredUserList" :key="row.id">
                   <td><span>{{ row.username }}</span></td>
                   <td><el-tag :type="row.role==='ROOT'?'danger':row.role==='ADMIN'?'warning':'info'" size="small">{{ row.role }}</el-tag></td>
+                  <td><span>{{ row.createdBy || '-' }}</span></td>
                   <td><span>{{ row.createdAt }}</span></td>
-                  <td><div class="record-actions"><el-button v-if="canEditUserRole(row)" size="small" @click="showRoleDialog(row)">修改角色</el-button><el-button v-if="row.role!=='ROOT'&&currentUser.role==='ROOT'" size="small" type="danger" @click="handleDeleteUser(row)">删除</el-button></div></td>
+                  <td><div class="record-actions"><el-button v-if="canDeleteUser(row)" size="small" type="danger" @click="handleDeleteUser(row)">删除</el-button></div></td>
                 </tr>
               </tbody>
             </table>
@@ -182,7 +216,7 @@
       </div>
 
       <div v-show="activePage==='nodes'" class="page-nodes">
-        <div class="page-header" style="display:flex;justify-content:space-between;align-items:center"><h2>集群节点管理</h2><div><el-button type="primary" size="small" @click="syncNodes" :loading="nodesSyncing">同步节点</el-button></div></div>
+        <div class="page-header" style="display:flex;justify-content:space-between;align-items:center"><h2>集群节点信息</h2><div v-if="isAdmin"><el-button type="primary" size="small" @click="syncNodes" :loading="nodesSyncing">同步节点</el-button></div></div>
 
         <div class="cluster-overview">
           <el-card shadow="hover" class="overview-card"><div class="overview-value">{{ clusterOverview.totalNodes || 0 }}</div><div class="overview-label">总节点数</div></el-card>
@@ -197,47 +231,72 @@
             <table class="records-table">
               <thead><tr>
                 <th class="col-nname">节点名称</th>
-                <th class="col-nip">IP地址</th>
+                <th v-if="isAdmin" class="col-nip">IP地址</th>
                 <th class="col-nrole">角色</th>
                 <th class="col-nstatus">状态</th>
-                <th class="col-nsched">可调度</th>
+                <th v-if="isAdmin" class="col-nsched">可调度</th>
                 <th class="col-ncpu">CPU</th>
                 <th class="col-nmem">内存</th>
                 <th class="col-ngpu">GPU</th>
-                <th class="col-nconc">并发数</th>
+                <th v-if="isAdmin" class="col-nconc">并发数</th>
                 <th class="col-ntasks">当前任务</th>
                 <th class="col-nremain">剩余</th>
-                <th class="col-nact">操作</th>
+                <th v-if="isAdmin" class="col-nact">操作</th>
               </tr></thead>
               <tbody>
                 <tr v-for="row in clusterNodes" :key="row.nodeName">
                   <td><span>{{ row.nodeName }}</span></td>
-                  <td><span>{{ row.nodeIp }}</span></td>
+                  <td v-if="isAdmin"><span>{{ row.nodeIp }}</span></td>
                   <td><el-tag :type="row.roles&&row.roles.includes('control-plane')?'danger':'primary'" size="small">{{ row.roles&&row.roles.includes('control-plane')?'Master':'Worker' }}</el-tag></td>
                   <td><el-tag :type="row.ready?'success':'danger'" size="small">{{ row.ready?'就绪':'未就绪' }}</el-tag></td>
-                  <td><el-tag :type="row.schedulable?'success':'warning'" size="small">{{ row.schedulable?'是':'否' }}</el-tag></td>
+                  <td v-if="isAdmin"><el-tag :type="row.schedulable?'success':'warning'" size="small">{{ row.schedulable?'是':'否' }}</el-tag></td>
                   <td><span>{{ row.cpuAllocatable }}</span></td>
                   <td><span>{{ formatMemory(row.memoryAllocatable) }}</span></td>
                   <td><span>{{ row.gpuAllocatable }}</span></td>
-                  <td><div class="node-concurrent"><el-input-number v-model="row._editMaxConcurrent" size="small" :min="1" :max="getCpuCoreCount(row)" style="width:72px" /><el-button type="primary" size="small" @click="handleNodeMaxConcurrentChange(row)">保存</el-button></div></td>
+                  <td v-if="isAdmin"><span>{{ row.maxConcurrentTasks || 1 }}</span></td>
                   <td><el-tag size="small" type="warning">{{ row.currentTasks || 0 }}</el-tag></td>
                   <td><el-tag :type="(row.remainingSlots||0)>0?'success':'danger'" size="small">{{ row.remainingSlots || 0 }}</el-tag></td>
-                  <td><div class="record-actions"><el-button v-if="row.schedulable" size="small" type="warning" @click="cordonNode(row.nodeName)">停止调度</el-button><el-button v-else size="small" type="success" @click="uncordonNode(row.nodeName)">恢复调度</el-button></div></td>
+                  <td v-if="isAdmin"><div class="record-actions"><el-button v-if="row.schedulable" size="small" type="warning" @click="cordonNode(row.nodeName)">停止调度</el-button><el-button v-else size="small" type="success" @click="uncordonNode(row.nodeName)">恢复调度</el-button></div></td>
                 </tr>
               </tbody>
             </table>
           </div>
         </el-card>
 
-      </div>
-    </main>
+        <el-card v-if="isAdmin" shadow="hover" style="margin-top:14px">
+          <template #header><span class="card-title">节点训练历史</span></template>
+          <div style="overflow-x:auto">
+            <table class="records-table">
+              <thead><tr>
+                <th>节点</th><th>记录名</th><th>数据集</th><th>类型</th><th>状态</th><th>Epochs</th><th>Imgsz</th><th>提交者</th><th>开始时间</th><th>结束时间</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="log in nodeLogs" :key="log.id">
+                  <td><el-tag size="small" type="primary">{{ log.nodeName }}</el-tag></td>
+                  <td><span>{{ log.recordName }}</span></td>
+                  <td><span>{{ log.dataName }}</span></td>
+                  <td><el-tag :type="log.taskType==='train'?'warning':'success'" size="small">{{ log.taskType==='train'?'训练':'测试' }}</el-tag></td>
+                  <td><el-tag :type="getStatusClass(log.status)" size="small">{{ getStatusText(log.status,log.taskType) }}</el-tag></td>
+                  <td><span>{{ log.epochs }}</span></td>
+                  <td><span>{{ log.imgsz }}</span></td>
+                  <td><span>{{ log.createdBy }}</span></td>
+                  <td><span class="param-fixed">{{ log.startedAt }}</span></td>
+                  <td><span class="param-fixed">{{ log.finishedAt || '-' }}</span></td>
+                </tr>
+                <tr v-if="!nodeLogs.length"><td colspan="10" style="color:#909399">暂无训练历史</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </el-card>
 
-    <el-dialog title="下载模型" v-model="saveModelDialogVisible" width="480px" :close-on-click-modal="false">
+      </div>
+
+    <el-dialog title="保存模型到模型库" v-model="saveModelDialogVisible" width="480px" :close-on-click-modal="false">
       <el-form :model="saveModelForm" label-width="80px">
         <el-form-item label="记录"><el-tag type="success">{{ saveModelForm.recordName }}</el-tag></el-form-item>
         <el-form-item label="类型"><el-radio-group v-model="saveModelForm.modelType"><el-radio label="best">最佳模型(best.pt)</el-radio><el-radio label="last">最后模型(last.pt)</el-radio></el-radio-group></el-form-item>
       </el-form>
-      <template #footer><el-button type="primary" @click="confirmSaveModel" :loading="saveModelLoading">下载模型</el-button></template>
+      <template #footer><el-button type="primary" @click="confirmSaveModel" :loading="saveModelLoading">保存到模型库</el-button></template>
     </el-dialog>
 
     <el-dialog title="分布式训练配置" v-model="showDistributedTrainDialog" width="520px" :close-on-click-modal="false">
@@ -245,7 +304,6 @@
         <el-form-item label="数据集"><el-tag>{{ distributedTrainForm.dataName }}</el-tag></el-form-item>
         <el-form-item label="Epochs"><el-input-number v-model="distributedTrainForm.epochs" :min="1" :max="1000" /></el-form-item>
         <el-form-item label="Imgsz"><el-input-number v-model="distributedTrainForm.imgsz" :min="32" :max="1280" :step="32" /></el-form-item>
-        <el-form-item label="优先级"><el-input-number v-model="distributedTrainForm.priority" :min="1" :max="10" /></el-form-item>
         <el-form-item label="目标节点"><el-select v-model="distributedTrainForm.targetNode" placeholder="自动选择" clearable style="width:100%"><el-option v-for="n in schedulableNodes" :key="n.nodeName" :label="n.nodeName + (n.gpuAllocatable&&n.gpuAllocatable!=='0'?' [GPU:'+n.gpuAllocatable+']':'')" :value="n.nodeName" /></el-select></el-form-item>
         <el-form-item label="GPU资源"><el-select v-model="distributedTrainForm.gpuType" placeholder="无GPU" clearable style="width:100%"><el-option label="NVIDIA GPU" value="nvidia.com/gpu" /></el-select></el-form-item>
         <el-form-item v-if="distributedTrainForm.gpuType" label="GPU数量"><el-input-number v-model="distributedTrainForm.gpuCount" :min="1" :max="8" /></el-form-item>
@@ -255,10 +313,7 @@
 
     <el-dialog title="添加用户" v-model="showAddUserDialog" width="360px"><el-form :model="newUserForm" label-width="70px"><el-form-item label="用户名"><el-input v-model="newUserForm.username" /></el-form-item><el-form-item label="密码"><el-input v-model="newUserForm.password" type="password" /></el-form-item><el-form-item v-if="currentUser.role==='ROOT'" label="角色"><el-select v-model="newUserForm.role"><el-option label="普通用户" value="USER" /><el-option label="管理员" value="ADMIN" /></el-select></el-form-item><el-form-item v-else label="角色"><el-tag type="info">普通用户</el-tag></el-form-item></el-form><template #footer><el-button @click="showAddUserDialog=false">取消</el-button><el-button type="primary" @click="handleAddUser">创建</el-button></template></el-dialog>
 
-    <el-dialog title="修改角色" v-model="showRoleDialogVisible" width="320px">
-      <el-form label-width="70px"><el-form-item label="用户"><strong>{{ roleEditTarget.username }}</strong></el-form-item><el-form-item label="新角色"><el-select v-model="roleEditNewRole"><el-option v-if="currentUser.role==='ROOT'" label="普通用户(USER)" value="USER" /><el-option v-if="currentUser.role==='ROOT'" label="管理员(ADMIN)" value="ADMIN" /><el-option v-if="currentUser.role==='ADMIN'" label="普通用户(USER)" value="USER" /></el-select></el-form-item></el-form>
-      <template #footer><el-button @click="showRoleDialogVisible=false">取消</el-button><el-button type="primary" @click="confirmRoleChange">确认</el-button></template>
-    </el-dialog>
+    <el-dialog title="确认删除用户" v-model="deleteUserConfirmVisible" width="360px"><p>确定删除用户 <strong>{{ userToDelete.username }}</strong>？</p><p style="color:#f56c6c;font-size:13px">此操作不可恢复。</p><template #footer><el-button @click="deleteUserConfirmVisible=false">取消</el-button><el-button type="danger" @click="confirmDeleteUser">确认</el-button></template></el-dialog>
 
     <el-dialog title="确认删除数据集" v-model="deleteConfirmVisible" width="360px"><p>确定删除数据集 <strong>{{ datasetToDelete }}</strong>？</p><p style="color:#f56c6c;font-size:13px">此操作将删除所有关联的训练记录、K8s Job/Pod、YAML文件、runs目录和日志文件。</p><template #footer><el-button @click="deleteConfirmVisible=false">取消</el-button><el-button type="danger" @click="confirmDelete">确认</el-button></template></el-dialog>
 
@@ -266,16 +321,70 @@
 
     <el-dialog title="确认清空" v-model="cleanupConfirmVisible" width="400px"><p>确定<strong>清空全部数据</strong>？</p><p style="color:#f56c6c;font-size:13px">此操作将删除所有数据集、训练记录、K8s Job/YAML和操作日志，不可恢复。</p><template #footer><el-button @click="cleanupConfirmVisible=false">取消</el-button><el-button type="danger" @click="confirmCleanup" :loading="cleanupLoading">确认</el-button></template></el-dialog>
 
-    <el-dialog title="确认删除用户" v-model="deleteUserConfirmVisible" width="360px"><p>确定删除用户 <strong>{{ userToDelete.username }}</strong>？</p><p style="color:#f56c6c;font-size:13px">此操作不可恢复。</p><template #footer><el-button @click="deleteUserConfirmVisible=false">取消</el-button><el-button type="danger" @click="confirmDeleteUser">确认</el-button></template></el-dialog>
-
     <el-dialog title="修改密码" v-model="showChangePasswordDialog" width="360px"><el-form :model="changePasswordForm" label-width="70px"><el-form-item label="旧密码"><el-input v-model="changePasswordForm.oldPassword" type="password" placeholder="请输入旧密码" /></el-form-item><el-form-item label="新密码"><el-input v-model="changePasswordForm.newPassword" type="password" placeholder="请输入新密码（至少4位）" /></el-form-item><el-form-item label="确认"><el-input v-model="changePasswordForm.confirmPassword" type="password" placeholder="再次输入新密码" /></el-form-item></el-form><template #footer><el-button @click="showChangePasswordDialog=false">取消</el-button><el-button type="primary" @click="handleChangePassword">确认修改</el-button></template></el-dialog>
+
+    <el-dialog :title="runsResultTitle" v-model="runsResultVisible" width="700px" :close-on-click-modal="false">
+      <div v-if="runsResultLoading" style="text-align:center;padding:30px"><el-icon class="is-loading" size="24"><Loading /></el-icon><p>加载中...</p></div>
+      <div v-else-if="!runsResultData.exists" style="text-align:center;padding:30px;color:#909399">结果目录不存在</div>
+      <div v-else>
+        <div v-if="runsResultData.resultsCsv" style="margin-bottom:14px">
+          <h4 style="margin:0 0 8px;font-size:14px;color:#303133">results.csv</h4>
+          <div style="max-height:250px;overflow:auto;border:1px solid #ebeef5;border-radius:6px;padding:10px;background:#fafafa">
+            <pre style="margin:0;font-size:12px;white-space:pre-wrap;font-family:'Cascadia Code','Fira Code','Consolas',monospace">{{ runsResultData.resultsCsv }}</pre>
+          </div>
+        </div>
+        <h4 style="margin:0 0 8px;font-size:14px;color:#303133">文件列表</h4>
+        <div style="max-height:300px;overflow:auto">
+          <table class="records-table" style="font-size:12px">
+            <thead><tr><th>文件名</th><th>路径</th><th>类型</th><th>大小</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr v-for="f in runsResultData.files" :key="f.path">
+                <td><span>{{ f.name }}</span></td>
+                <td><span style="color:#909399;font-size:11px">{{ f.path }}</span></td>
+                <td><el-tag v-if="f.isDirectory" size="small" type="info">目录</el-tag><el-tag v-else-if="f.isImage" size="small" type="success">图片</el-tag><el-tag v-else-if="f.isCsv" size="small" type="warning">CSV</el-tag><el-tag v-else-if="f.isText" size="small">文本</el-tag><el-tag v-else size="small" type="info">文件</el-tag></td>
+                <td><span v-if="!f.isDirectory">{{ (f.size/1024).toFixed(1) }}KB</span></td>
+                <td><el-button v-if="f.isText && !f.isDirectory" size="small" @click="loadRunsFile(runsResultCurrentRecord,runsResultCurrentType,f.path)">查看</el-button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <template #footer><el-button @click="runsResultVisible=false">关闭</el-button></template>
+    </el-dialog>
+
+    <el-dialog :title="runsFileTitle" v-model="runsFileVisible" width="600px">
+      <div style="max-height:400px;overflow:auto;border:1px solid #ebeef5;border-radius:6px;padding:10px;background:#fafafa">
+        <pre style="margin:0;font-size:12px;white-space:pre-wrap;font-family:'Cascadia Code','Fira Code','Consolas',monospace">{{ runsFileContent }}</pre>
+      </div>
+      <template #footer><el-button @click="runsFileVisible=false">关闭</el-button></template>
+    </el-dialog>
+
+    <el-dialog title="模型推理" v-model="predictDialogVisible" width="500px">
+      <el-form label-width="80px">
+        <el-form-item label="模型"><el-tag type="success">{{ predictForm.modelName }}</el-tag></el-form-item>
+        <el-form-item label="数据集"><el-select v-model="predictForm.dataName" placeholder="选择目标数据集" style="width:100%"><el-option v-for="ds in datasetList" :key="ds.name" :label="ds.name" :value="ds.name" /></el-select></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="predictDialogVisible=false">取消</el-button><el-button type="primary" @click="handlePredict" :loading="predictLoading">开始推理</el-button></template>
+    </el-dialog>
+
+    <el-dialog title="推理结果" v-model="predictResultVisible" width="800px">
+      <div v-if="predictResultLoading" style="text-align:center;padding:30px"><el-icon class="is-loading" size="24"><Loading /></el-icon><p>推理中，请稍候...</p></div>
+      <div v-else-if="predictResultImages.length===0" style="text-align:center;padding:30px;color:#909399">暂无推理结果图片</div>
+      <div v-else style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;max-height:500px;overflow:auto">
+        <div v-for="img in predictResultImages" :key="img.name" style="border:1px solid #ebeef5;border-radius:6px;overflow:hidden">
+          <img :src="getPredictImageUrl(img.name)" style="width:100%;display:block;cursor:pointer" @click="openPredictImage(img.name)" />
+          <div style="padding:4px 8px;font-size:11px;color:#606266;text-overflow:ellipsis;overflow:hidden;white-space:nowrap">{{ img.name }}</div>
+        </div>
+      </div>
+      <template #footer><el-button @click="predictResultVisible=false">关闭</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, onMounted, nextTick, computed, watch, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { UploadFilled, Monitor, Document, UserFilled, Coin, Lock, Delete, SwitchButton } from '@element-plus/icons-vue'
+import { UploadFilled, Monitor, Document, UserFilled, Coin, Lock, Delete, SwitchButton, Loading, Box } from '@element-plus/icons-vue'
 import axios from 'axios'
 
 const isLoggedIn=ref(false)
@@ -291,7 +400,6 @@ const newUserForm=reactive({username:'',password:'',role:'USER'})
 const pendingRecords=ref({}),preprocessLogs=ref({}),trainLogs=ref({}),testLogs=ref({})
 const logRefs=ref({})
 const saveModelDialogVisible=ref(false),saveModelForm=reactive({dataName:'',modelType:'best',savePath:'',recordName:''}),saveModelLoading=ref(false)
-const showRoleDialogVisible=ref(false),roleEditTarget=ref({}),roleEditNewRole=ref('')
 const deleteUserConfirmVisible=ref(false),userToDelete=ref({})
 const showChangePasswordDialog=ref(false),changePasswordForm=reactive({oldPassword:'',newPassword:'',confirmPassword:''})
 const currentPage=ref(1),pageSize=ref(10),total=ref(0)
@@ -305,7 +413,13 @@ const logPage=ref(1),logPageSize=ref(20)
 const userSearch=ref(''),userRoleFilter=ref('')
 
 const clusterNodes=ref([]),clusterOverview=reactive({totalNodes:0,readyNodes:0,gpuNodes:0,masterNodes:0,workerNodes:0}),nodesSyncing=ref(false),schedulingMode=ref('auto')
-const showDistributedTrainDialog=ref(false),distributedTrainForm=reactive({dataName:'',epochs:2,imgsz:640,priority:5,targetNode:'',gpuType:'',gpuCount:1})
+const nodeLogs=ref([])
+const runsResultVisible=ref(false),runsResultLoading=ref(false),runsResultData=ref({}),runsResultTitle=ref(''),runsResultCurrentRecord=ref(''),runsResultCurrentType=ref('')
+const runsFileVisible=ref(false),runsFileTitle=ref(''),runsFileContent=ref('')
+const modelList=ref([])
+const predictDialogVisible=ref(false),predictForm=reactive({modelId:null,modelName:'',dataName:''}),predictLoading=ref(false)
+const predictResultVisible=ref(false),predictResultLoading=ref(false),predictResultImages=ref([]),predictResultModelId=ref(null),predictResultDataName=ref('')
+const showDistributedTrainDialog=ref(false),distributedTrainForm=reactive({dataName:'',epochs:2,imgsz:640,targetNode:'',gpuType:'',gpuCount:1})
 const schedulableNodes=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable))
 const totalMaxConcurrent=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+(n.maxConcurrentTasks||1),0))
 const totalRemainingSlots=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+(n.remainingSlots||0),0))
@@ -324,36 +438,35 @@ const pagedLogList=computed(()=>{const sorted=[...filteredLogs.value].sort((a,b)
 const filteredUserList=computed(()=>{let list=[...userList.value];if(userSearch.value){const kw=userSearch.value.toLowerCase();list=list.filter(u=>u.username.toLowerCase().includes(kw))}if(userRoleFilter.value){list=list.filter(u=>u.role===userRoleFilter.value)}return list})
 
 const handleFileUpload=async(file)=>{const dataName=file.name.replace(/\.zip$/i,'');currentStep.value='addDataset';try{const formData=new FormData();formData.append('file',file);formData.append('dataName',dataName);const r=await api.value.post('/api/datasets/upload',formData,{headers:{'Content-Type':'multipart/form-data'},timeout:0,maxContentLength:Infinity,maxBodyLength:Infinity});showMsg(`数据集 ${dataName} 上传成功`);await refreshDatasets();await loadTrainingRecords()}catch(e){showMsg(`上传失败: ${e.response?.data?.message||e.message}`,'error')}finally{currentStep.value='';return false}}
-const canEditUserRole=(row)=>{if(!row||row.role==='ROOT')return false;if(currentUser.username===row.username)return false;if(currentUser.role==='ROOT')return true;if(currentUser.role==='ADMIN'&&row.role==='USER')return true;return false}
+const canDeleteUser=(row)=>{if(!row||row.role==='ROOT')return false;if(currentUser.username===row.username)return false;if(currentUser.role==='ROOT'&&row.role!=='ROOT')return true;if(currentUser.role==='ADMIN'&&row.role==='USER'&&currentUser.username===row.createdBy)return true;return false}
 const getDatasetRecords=(dataName)=>trainingRecords.value.filter(r=>r.dataName===dataName)
 const getPendingRecords=(dataName)=>pendingRecords.value[dataName]||[]
 const isEditable=(rec)=>rec.trainStatus==='IDLE'&&(!rec.trainJobId||rec.trainJobId==='')
 const hasTrainLog=(rec)=>rec.trainStatus!=='IDLE'||rec.trainJobId
 const hasTestLog=(rec)=>rec.testStatus&&rec.testStatus!=='IDLE'
-const addPendingRecord=(dataName)=>{if(!pendingRecords.value[dataName])pendingRecords.value[dataName]=[];const k='pending-'+Date.now();pendingRecords.value[dataName].push({key:k,epochs:savedDefaultEpochs.value,imgsz:savedDefaultImgsz.value,priority:5,scheduleMode:'auto',targetNode:''})}
+const addPendingRecord=(dataName)=>{if(!pendingRecords.value[dataName])pendingRecords.value[dataName]=[];const k='pending-'+Date.now();pendingRecords.value[dataName].push({key:k,epochs:savedDefaultEpochs.value,imgsz:savedDefaultImgsz.value,scheduleMode:'auto',targetNode:''})}
 const removePendingRecord=(dataName,key)=>{if(pendingRecords.value[dataName])pendingRecords.value[dataName]=pendingRecords.value[dataName].filter(r=>r.key!==key)}
 
 const switchToLogs=()=>{activePage.value='logs';loadOperationLogs()}
 const switchToUsers=()=>{activePage.value='users';loadUsers()}
-const switchToNodes=()=>{activePage.value='nodes';loadClusterNodes();loadClusterOverview()}
+const switchToNodes=()=>{activePage.value='nodes';loadClusterNodes();loadClusterOverview();loadNodeLogs()}
+const loadNodeLogs=async()=>{if(!isAdmin.value)return;try{const r=await api.value.get('/api/nodes/logs');nodeLogs.value=r.data}catch(e){}}
 
-const loadClusterNodes=async()=>{try{const r=await api.value.get('/api/nodes');clusterNodes.value=r.data.map(n=>({...n,_editMaxConcurrent:n.maxConcurrentTasks||1,currentTasks:n.currentTasks||0,remainingSlots:n.remainingSlots!=null?n.remainingSlots:(n.maxConcurrentTasks||1)-(n.currentTasks||0)}))}catch(e){}}
+const loadClusterNodes=async()=>{try{const r=await api.value.get('/api/nodes');clusterNodes.value=r.data.map(n=>({...n,currentTasks:n.currentTasks||0,remainingSlots:n.remainingSlots!=null?n.remainingSlots:(n.maxConcurrentTasks||1)-(n.currentTasks||0)}))}catch(e){}}
 const loadClusterOverview=async()=>{try{const r=await api.value.get('/api/nodes/overview');Object.assign(clusterOverview,r.data)}catch(e){}}
 const syncNodes=async()=>{nodesSyncing.value=true;try{await api.value.post('/api/nodes/sync');await loadClusterNodes();await loadClusterOverview();showMsg('节点同步完成')}catch(e){showMsg('同步失败','error')}finally{nodesSyncing.value=false}}
 const cordonNode=async(name)=>{try{await api.value.post(`/api/nodes/${name}/cordon`);showMsg(`节点 ${name} 已停止调度`);await loadClusterNodes()}catch(e){showMsg('操作失败','error')}}
 const uncordonNode=async(name)=>{try{await api.value.post(`/api/nodes/${name}/uncordon`);showMsg(`节点 ${name} 已恢复调度`);await loadClusterNodes()}catch(e){showMsg('操作失败','error')}}
-const deleteNodeRecord=async(name)=>{try{await api.value.delete(`/api/nodes/${name}`);showMsg('节点记录已删除');await loadClusterNodes();await loadClusterOverview()}catch(e){showMsg('删除失败','error')}}
 const handleSchedulingModeChange=async(v)=>{try{await api.value.post('/api/scheduler/scheduling-mode',{mode:v});showMsg(`调度模式已设为 ${v==='auto'?'自动':'手动'}`)}catch(e){showMsg('更新失败','error')}}
-const handleNodeMaxConcurrentChange=async(row)=>{try{await api.value.post(`/api/nodes/${row.nodeName}/max-concurrent`,{maxConcurrent:row._editMaxConcurrent});row.maxConcurrentTasks=row._editMaxConcurrent;showMsg(`节点 ${row.nodeName} 并发数已设为 ${row._editMaxConcurrent}`)}catch(e){showMsg('更新失败','error')}}
 
-const showDistributedTrain=(dataName)=>{distributedTrainForm.dataName=dataName;distributedTrainForm.epochs=savedDefaultEpochs.value;distributedTrainForm.imgsz=savedDefaultImgsz.value;distributedTrainForm.priority=5;distributedTrainForm.targetNode='';distributedTrainForm.gpuType='';distributedTrainForm.gpuCount=1;showDistributedTrainDialog.value=true}
-const confirmDistributedTrain=async()=>{const req={dataName:distributedTrainForm.dataName,epochs:distributedTrainForm.epochs,imgsz:distributedTrainForm.imgsz,priority:distributedTrainForm.priority};if(distributedTrainForm.targetNode)req.targetNode=distributedTrainForm.targetNode;if(distributedTrainForm.gpuType&&distributedTrainForm.gpuCount>0){req.gpuResources={};req.gpuResources[distributedTrainForm.gpuType]=String(distributedTrainForm.gpuCount)}try{const r=await api.value.post('/api/scheduler/add',req);showMsg(r.data.message);showDistributedTrainDialog.value=false;await loadTrainingRecords();const rn=`${distributedTrainForm.dataName}-e${distributedTrainForm.epochs}-i${distributedTrainForm.imgsz}`;trainLogs.value[rn]='';connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){showMsg(e.response?.data?.message||'提交失败','error')}}
+const showDistributedTrain=(dataName)=>{distributedTrainForm.dataName=dataName;distributedTrainForm.epochs=savedDefaultEpochs.value;distributedTrainForm.imgsz=savedDefaultImgsz.value;distributedTrainForm.targetNode='';distributedTrainForm.gpuType='';distributedTrainForm.gpuCount=1;showDistributedTrainDialog.value=true}
+const confirmDistributedTrain=async()=>{const req={dataName:distributedTrainForm.dataName,epochs:distributedTrainForm.epochs,imgsz:distributedTrainForm.imgsz};if(distributedTrainForm.targetNode)req.targetNode=distributedTrainForm.targetNode;if(distributedTrainForm.gpuType&&distributedTrainForm.gpuCount>0){req.gpuResources={};req.gpuResources[distributedTrainForm.gpuType]=String(distributedTrainForm.gpuCount)}try{const r=await api.value.post('/api/scheduler/add',req);showMsg(r.data.message);showDistributedTrainDialog.value=false;await loadTrainingRecords();const rn=`${distributedTrainForm.dataName}-e${distributedTrainForm.epochs}-i${distributedTrainForm.imgsz}`;trainLogs.value[rn]='';connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){showMsg(e.response?.data?.message||'提交失败','error')}}
 
 const handleLogin=async()=>{if(loginLoading.value)return;loginLoading.value=true;loginError.value='';try{const r=await axios.post('/api/auth/login',loginForm);token.value=r.data.token;currentUser.username=r.data.username;currentUser.role=r.data.role;isLoggedIn.value=true;localStorage.setItem('token',token.value);localStorage.setItem('username',currentUser.username);localStorage.setItem('role',currentUser.role);onLoginSuccess()}catch(e){loginError.value=e.response?.data?.message||'登录失败'}finally{loginLoading.value=false}}
 
 const handleLogout=()=>{token.value='';currentUser.username='';currentUser.role='';isLoggedIn.value=false;localStorage.removeItem('token');localStorage.removeItem('username');localStorage.removeItem('role');stopAllWs();stopStatusRefresh();stopAllPreprocessTimers();datasetList.value=[];trainingRecords.value=[];userList.value=[];operationLogs.value=[];Object.keys(pendingRecords.value).forEach(k=>delete pendingRecords.value[k]);Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k]);Object.keys(processingStatus.value).forEach(k=>delete processingStatus.value[k]);Object.keys(testLoadingStatus.value).forEach(k=>delete testLoadingStatus.value[k]);currentPage.value=1;total.value=0;activePage.value='main'}
 
-const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs(),loadClusterNodes()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz;if(r.data.schedulingMode)schedulingMode.value=r.data.schedulingMode}startStatusRefresh()}catch(e){}}
+const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs(),loadClusterNodes(),loadModelList()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz;if(r.data.schedulingMode)schedulingMode.value=r.data.schedulingMode}startStatusRefresh()}catch(e){}}
 
 const loadTrainingRecords=async()=>{try{const oldRecords=[...trainingRecords.value];trainingRecords.value=(await api.value.get('/api/training-records')).data;checkStatusChanges(oldRecords,trainingRecords.value)}catch(e){}}
 const loadUsers=async()=>{try{const params={};if(userSearch.value)params.search=userSearch.value;if(userRoleFilter.value)params.role=userRoleFilter.value;userList.value=(await api.value.get('/api/users',{params})).data}catch(e){}}
@@ -374,9 +487,9 @@ const pollPreprocess=(jobId,dataName)=>{const tid=`pre-${dataName}-${Date.now()}
 
 const stopAllPreprocessTimers=()=>{Object.values(preprocessTimers.value).forEach(id=>clearInterval(id));preprocessTimers.value={}}
 
-const handleTrainRecord=async(rec)=>{const rn=rec.recordName;trainLogs.value[rn]='';try{const r=await api.value.post('/api/scheduler/add',{dataName:rec.dataName,epochs:rec.epochs,imgsz:rec.imgsz,priority:rec.priority||5});showMsg(r.data.message);await loadTrainingRecords();connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){delete trainLogs.value[rn];showMsg(e.response?.data?.message||'加入队列失败','error')}}
+const handleTrainRecord=async(rec)=>{const rn=rec.recordName;trainLogs.value[rn]='';try{const r=await api.value.post('/api/scheduler/add',{dataName:rec.dataName,epochs:rec.epochs,imgsz:rec.imgsz});showMsg(r.data.message);await loadTrainingRecords();connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){delete trainLogs.value[rn];showMsg(e.response?.data?.message||'加入队列失败','error')}}
 
-const handleTrainPending=async(dataName,pending)=>{const rn=`${dataName}-e${pending.epochs}-i${pending.imgsz}`;trainLogs.value[rn]='';try{const req={dataName,epochs:pending.epochs,imgsz:pending.imgsz,priority:pending.priority};if(pending.scheduleMode==='manual'&&pending.targetNode)req.targetNode=pending.targetNode;const r=await api.value.post('/api/scheduler/add',req);showMsg(r.data.message);removePendingRecord(dataName,pending.key);await loadTrainingRecords();connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){delete trainLogs.value[rn];showMsg(e.response?.data?.message||'加入队列失败','error')}}
+const handleTrainPending=async(dataName,pending)=>{const rn=`${dataName}-e${pending.epochs}-i${pending.imgsz}`;trainLogs.value[rn]='';try{const req={dataName,epochs:pending.epochs,imgsz:pending.imgsz};if(pending.scheduleMode==='manual'&&pending.targetNode)req.targetNode=pending.targetNode;const r=await api.value.post('/api/scheduler/add',req);showMsg(r.data.message);removePendingRecord(dataName,pending.key);await loadTrainingRecords();connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){delete trainLogs.value[rn];showMsg(e.response?.data?.message||'加入队列失败','error')}}
 
 const handleTestRecord=async(rec)=>{testLogs.value[rec.recordName]='';testLoadingStatus.value[rec.recordName]=true;try{const r=await api.value.post('/api/test',{dataName:rec.dataName,imgsz:rec.imgsz,recordName:rec.recordName});showMsg('测试任务已启动');await loadTrainingRecords();connectLogWebSocket(rec.recordName,'test');startStatusRefresh()}catch(e){testLogs.value[rec.recordName]=`错误: ${e.message}\n`;testLoadingStatus.value[rec.recordName]=false}}
 
@@ -404,7 +517,7 @@ const handleDeleteRecord=(rec)=>{recordToDelete.value=rec.recordName;deleteRecor
 const confirmDeleteRecord=async()=>{const rn=recordToDelete.value;try{closeWsConnection(rn+'-train');closeWsConnection(rn+'-test');delete trainLogs.value[rn];delete testLogs.value[rn];await api.value.delete(`/api/training-records/${encodeURIComponent(rn)}`);showMsg('训练记录已删除');await refreshDatasets();await loadTrainingRecords()}catch(e){showMsg(e.response?.data?.message||(e.response?.status===404?'记录不存在':'删除失败'),'error')}finally{deleteRecordConfirmVisible.value=false}}
 
 const showSaveModelDialog=rec=>{saveModelForm.dataName=rec.dataName;saveModelForm.recordName=rec.recordName;saveModelForm.modelType='best';saveModelForm.savePath='';saveModelDialogVisible.value=true}
-const confirmSaveModel=async()=>{saveModelLoading.value=true;try{const r=await api.value.get('/api/model/download',{params:{dataName:saveModelForm.dataName,modelType:saveModelForm.modelType,recordName:saveModelForm.recordName}});if(r.data.status==='success'&&r.data.path){const downloadUrl='/api/model/file?path='+encodeURIComponent(r.data.path);const resp=await fetch(downloadUrl,{headers:{Authorization:`Bearer ${token.value}`}});if(!resp.ok){showMsg('下载失败: '+resp.status,'error');return}const blob=await resp.blob();const url=window.URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=r.data.fileName||saveModelForm.modelType+'.pt';document.body.appendChild(a);a.click();document.body.removeChild(a);window.URL.revokeObjectURL(url);showMsg('模型下载成功');saveModelDialogVisible.value=false}else{showMsg(r.data.message||'模型文件不存在','error')}}catch(e){showMsg(e.response?.data?.message||'下载失败','error')}finally{saveModelLoading.value=false}}
+const confirmSaveModel=async()=>{saveModelLoading.value=true;try{const r=await api.value.post('/api/models',{recordName:saveModelForm.recordName,modelType:saveModelForm.modelType});if(r.data.status==='success'){showMsg('模型已保存到模型库');saveModelDialogVisible.value=false;loadModelList()}else{showMsg(r.data.message||'保存失败','error')}}catch(e){showMsg(e.response?.data?.message||'保存失败','error')}finally{saveModelLoading.value=false}}
 
 const handleDeleteDataset=dn=>{datasetToDelete.value=dn;deleteConfirmVisible.value=true}
 const confirmDelete=async()=>{try{const dn=datasetToDelete.value;const recs=trainingRecords.value.filter(r=>r.dataName===dn);recs.forEach(r=>{closeWsConnection(r.recordName+'-train');closeWsConnection(r.recordName+'-test');delete trainLogs.value[r.recordName];delete testLogs.value[r.recordName]});delete preprocessLogs.value[dn];delete processingStatus.value[dn];await api.value.delete(`/api/datasets/${encodeURIComponent(dn)}`);await refreshDatasets();await loadTrainingRecords();showMsg('数据集及关联资源已删除')}catch(e){showMsg(e.response?.data?.message||(e.response?.status===404?'数据集不存在':'删除失败'),'error')}finally{deleteConfirmVisible.value=false}}
@@ -416,8 +529,6 @@ const handleDefaultEpochsChange=async(v)=>{try{await api.value.post('/api/schedu
 const handleDefaultImgszChange=async(v)=>{try{await api.value.post('/api/scheduler/default-imgsz',{imgsz:v});savedDefaultImgsz.value=v;showMsg(`默认Imgsz已设为 ${v}`)}catch(e){showMsg('更新失败','error')}}
 
 const handleAddUser=async()=>{if(currentUser.role==='ADMIN')newUserForm.role='USER';try{await api.value.post('/api/auth/register',newUserForm);showAddUserDialog.value=false;newUserForm.username='';newUserForm.password='';newUserForm.role='USER';loadUsers();showMsg('用户创建成功')}catch(e){showMsg(e.response?.data?.message||'创建失败','error')}}
-const showRoleDialog=user=>{roleEditTarget.value=user;roleEditNewRole.value=currentUser.role==='ADMIN'?'USER':(user.role||'USER');showRoleDialogVisible.value=true}
-const confirmRoleChange=async()=>{try{await api.value.put(`/api/users/${roleEditTarget.value.id}/role`,{role:roleEditNewRole.value});loadUsers();showRoleDialogVisible.value=false;showMsg(`角色已修改为 ${roleEditNewRole.value}`)}catch(e){showMsg(e.response?.data?.message||'修改失败','error')}}
 const handleDeleteUser=(user)=>{userToDelete.value=user;deleteUserConfirmVisible.value=true}
 const confirmDeleteUser=async()=>{try{await api.value.delete(`/api/users/${userToDelete.value.id}`);deleteUserConfirmVisible.value=false;loadUsers();showMsg('用户已删除')}catch(e){showMsg(e.response?.data?.message||'删除失败','error')}}
 const handleChangePassword=async()=>{if(!changePasswordForm.oldPassword||!changePasswordForm.newPassword){showMsg('请填写完整','warning');return}if(changePasswordForm.newPassword!==changePasswordForm.confirmPassword){showMsg('两次密码不一致','warning');return}if(changePasswordForm.newPassword.length<4){showMsg('新密码至少4位','warning');return}try{await api.value.put('/api/users/change-password',{oldPassword:changePasswordForm.oldPassword,newPassword:changePasswordForm.newPassword});showMsg('密码修改成功');showChangePasswordDialog.value=false;changePasswordForm.oldPassword='';changePasswordForm.newPassword='';changePasswordForm.confirmPassword=''}catch(e){showMsg(e.response?.data?.message||'修改失败','error')}}
@@ -428,53 +539,17 @@ const getStatusText=(s,t)=>{const p=t==='train'?'训练':'测试';if(s==='RUNNIN
 const formatMemory=v=>{if(!v)return'-';const s=String(v).trim();let bytes=0;const m=s.match(/^(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti|Pi|Ei|K|M|G|T|P|E)?$/i);if(m){const num=parseFloat(m[1]);const unit=(m[2]||'').toUpperCase();const units={KI:1024,MI:1024*1024,GI:1024*1024*1024,TI:1024*1024*1024*1024,PI:1024*1024*1024*1024*1024,EI:1024*1024*1024*1024*1024*1024,K:1000,M:1000*1000,G:1000*1000*1000,T:1000*1000*1000*1000,P:1000*1000*1000*1000*1000,E:1000*1000*1000*1000*1000*1000};bytes=num*(units[unit]||1)}else{const n=parseInt(s);if(isNaN(n))return v;bytes=n}if(bytes>=1073741824)return(bytes/1073741824).toFixed(1)+'GB';if(bytes>=1048576)return(bytes/1048576).toFixed(0)+'MB';if(bytes>=1024)return(bytes/1024).toFixed(0)+'KB';return bytes+'B'}
 const getCpuCoreCount=row=>{const v=row.cpuAllocatable||row.cpuCapacity||'4';const n=parseInt(v);return isNaN(n)?4:n}
 
-const parseTrainLog=log=>{
-if(!log)return{status:'empty',progress:null,rows:[],header:''}
-if(/排队中|QUEUED|等待调度/.test(log)&&!/Starting training|optimizer:|Image sizes|Epoch\s+GPU_mem/.test(log))return{status:'queued',progress:null,rows:[],header:''}
-let c=log.replace(/\x1b\[[0-9;]*[a-zA-Z]/g,'\n')
-c=c.replace(/\[K/g,'\n')
-c=c.replace(/\[[\d;]*m/g,'')
-c=c.replace(/[\u2500-\u257F━╸╺╻╹╿╽╼╾─━]/g,' ')
-const segments=c.split('\n')
-const lines=[]
-const seen=new Set()
-for(const s of segments){const t=s.trim();if(t&&!seen.has(t)){seen.add(t);lines.push(t)}}
-const rows=[]
-const used=new Set()
-let currentProgress=null
-let headerLines=[]
-let headerDone=false
-for(let i=0;i<lines.length;i++){
-const t=lines[i]
-if(!headerDone){
-if(/Epoch\s+GPU_mem\s+box_loss/.test(t)){headerDone=true;continue}
-if(/^\d+\/\d+\s+\d*G?\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+\d+\s+\d+\s*:/.test(t)){headerDone=true}
-else{headerLines.push(t);continue}
-}
-const em=t.match(/^(\d+\/\d+)\s+(\d*G?)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)\s+(\d+)\s*:\s*(\d+)%/)
-if(em){
-const pct=parseInt(em[8])
-if(pct>=100){
-for(let j=i+1;j<Math.min(i+10,lines.length);j++){
-const vm=lines[j].match(/^all\s+(\d+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/)
-if(vm){rows.push({e:em[1],i:vm[1],n:vm[2],p:vm[3],r:vm[4],m5:vm[5],m9:vm[6]});used.add(j);break}
-if(/^\d+\/\d+/.test(lines[j]))break
-}
-}else{currentProgress={e:em[1],gpu:em[2],box:em[3],cls:em[4],dfl:em[5],inst:em[6],size:em[7],pct}}
-}
-}
-let ci=-1
-for(let i=0;i<lines.length;i++)if(/epochs?\s+completed/.test(lines[i])){ci=i;break}
-if(ci>=0){
-for(let j=ci+1;j<lines.length;j++){
-const vm=lines[j].match(/^all\s+(\d+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/)
-if(vm&&!used.has(j)){rows.push({e:'best',i:vm[1],n:vm[2],p:vm[3],r:vm[4],m5:vm[5],m9:vm[6]});break}
-if(/Speed:/.test(lines[j]))break
-}
-}
-if(rows.length===0&&currentProgress===null&&headerLines.length===0)return{status:'waiting',progress:null,rows:[],header:''}
-return{status:'training',progress:currentProgress,rows,header:headerLines.join('\n')}
-}
+const viewRunsResult=async(recordName,type)=>{runsResultCurrentRecord.value=recordName;runsResultCurrentType.value=type;runsResultTitle.value=`${recordName} - ${type==='train'?'训练':'测试'}结果`;runsResultVisible.value=true;runsResultLoading.value=true;runsResultData.value={};try{const r=await api.value.get(`/api/nodes/runs/${recordName}/${type}`);runsResultData.value=r.data}catch(e){runsResultData.value={exists:false}}finally{runsResultLoading.value=false}}
+const loadRunsFile=async(recordName,type,path)=>{try{const r=await api.value.get(`/api/nodes/runs/${recordName}/${type}/file`,{params:{path}});if(r.data.content){runsFileTitle.value=r.data.fileName||path;runsFileContent.value=r.data.content;runsFileVisible.value=true}else{showMsg(r.data.error||'文件读取失败','error')}}catch(e){showMsg('文件读取失败','error')}}
+
+const switchToModels=()=>{activePage.value='models';loadModelList()}
+const loadModelList=async()=>{try{const r=await api.value.get('/api/models');modelList.value=r.data}catch(e){}}
+const showPredictDialog=m=>{predictForm.modelId=m.id;predictForm.modelName=m.modelName;predictForm.dataName='';predictDialogVisible.value=true}
+const handlePredict=async()=>{if(!predictForm.dataName){showMsg('请选择目标数据集','warning');return}predictLoading.value=true;try{const r=await api.value.post(`/api/models/${predictForm.modelId}/predict`,{dataName:predictForm.dataName});if(r.data.status==='success'){showMsg('推理任务已提交');predictDialogVisible.value=false;predictResultModelId.value=predictForm.modelId;predictResultDataName.value=predictForm.dataName;predictResultVisible.value=true;predictResultLoading.value=true;predictResultImages.value=[];pollPredictResults()}}catch(e){showMsg(e.response?.data?.message||'推理失败','error')}finally{predictLoading.value=false}}
+const pollPredictResults=async()=>{const iv=setInterval(async()=>{try{const r=await api.value.get(`/api/models/${predictResultModelId.value}/predict-results`,{params:{dataName:predictResultDataName.value}});if(r.data.exists){predictResultImages.value=r.data.images||[];predictResultLoading.value=false;clearInterval(iv)}}catch(e){}},3000);setTimeout(()=>{clearInterval(iv);predictResultLoading.value=false},60000)}
+const getPredictImageUrl=name=>`/api/models/${predictResultModelId.value}/predict-image?dataName=${encodeURIComponent(predictResultDataName.value)}&imageName=${encodeURIComponent(name)}&token=${token.value}`
+const openPredictImage=name=>{window.open(getPredictImageUrl(name),'_blank')}
+const handleDeleteModel=async m=>{try{await api.value.delete(`/api/models/${m.id}`);showMsg('模型已删除');loadModelList()}catch(e){showMsg(e.response?.data?.message||'删除失败','error')}}
 
 const setLogRef=(n,t,el)=>{if(el)logRefs.value[`${n}-${t}`]=el}
 const autoScroll=(n,t)=>{nextTick(()=>{const el=logRefs.value[`${n}-${t}`];if(el){const distanceToBottom=el.scrollHeight-el.scrollTop-el.clientHeight;if(distanceToBottom<=100)el.scrollTop=el.scrollHeight}})}
@@ -518,12 +593,11 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 .config-card{flex:2;min-width:min(250px,100%)}
 .card-title{font-size:15px;font-weight:600;color:#303133}
 
-.upload-area{border:2px dashed #c0c4cc;border-radius:12px;padding:clamp(20px,3vw,40px) clamp(16px,2vw,30px);text-align:center;transition:all .3s;cursor:pointer}
+.upload-area{border:2px dashed #c0c4cc;border-radius:10px;padding:12px 20px;text-align:center;transition:all .3s;cursor:pointer}
 .upload-area:hover{border-color:#409eff;background:rgba(64,158,255,.04)}
 .upload-area-active{border-color:#409eff;background:rgba(64,158,255,.08)}
-.upload-icon{color:#409eff;margin-bottom:8px}
-.upload-hint{font-size:15px;color:#606266;margin:8px 0 4px}
-.upload-sub{font-size:13px;color:#909399;margin:8px 0}
+.upload-icon{color:#409eff;margin-bottom:4px}
+.upload-hint{font-size:14px;color:#606266;margin:4px 0}
 
 .config-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.cfg-item{display:flex;align-items:center;gap:5px}.cfg-label{font-size:12px;color:#606266;white-space:nowrap}.cfg-value{font-size:18px;font-weight:700;color:#409eff}.cfg-hint{font-size:11px;color:#909399}
 
@@ -536,10 +610,10 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 .records-table{width:100%;border-collapse:collapse;font-size:13px;table-layout:auto}
 .records-table th{background:#f5f7fa;padding:7px 4px;text-align:center;font-weight:600;color:#606266;border:1px solid #ebeef5;white-space:nowrap}
 .records-table td{padding:6px 4px;text-align:center;vertical-align:middle;border:1px solid #ebeef5}
-.col-priority{width:90px}.col-epoch{width:80px}.col-imgsz{width:90px}.col-node{width:200px}.col-tstatus{width:140px}.col-estatus{width:100px}
+.col-epoch{width:80px}.col-imgsz{width:90px}.col-node{width:200px}.col-tstatus{width:140px}.col-estatus{width:100px}
 .col-nname{width:120px}.col-nip{width:130px}.col-nrole{width:80px}.col-nstatus{width:70px}.col-nsched{width:65px}.col-ncpu{width:55px}.col-nmem{width:85px}.col-ngpu{width:55px}.col-nconc{width:170px}.col-ntasks{width:80px}.col-nremain{width:65px}.col-nact{width:190px}
 .col-luser{width:100px}.col-laction{width:140px}.col-ltarget{width:150px}.col-ldetail{width:200px}.col-ltime{width:170px}
-.col-uuser{width:130px}.col-urole{width:100px}.col-utime{width:170px}.col-uact{width:200px}
+.col-uuser{width:130px}.col-urole{width:100px}.col-ucreator{width:100px}.col-utime{width:170px}.col-uact{width:120px}
 .param-fixed{font-weight:600;color:#303133}.status-cell{display:flex;flex-direction:column;align-items:center;gap:2px}
 .record-actions{display:flex;gap:3px;justify-content:center;flex-wrap:wrap}
 .pagination-container{display:flex;justify-content:center;margin-top:16px}

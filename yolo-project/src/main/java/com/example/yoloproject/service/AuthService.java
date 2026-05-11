@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 public class AuthService {
@@ -30,7 +31,7 @@ public class AuthService {
     public void init() {
         try {
             if (!userRepository.existsByUsername("root")) {
-                User root = new User("root", passwordEncoder.encode("root123"), "ROOT");
+                User root = new User("root", passwordEncoder.encode("root123"), "ROOT", "SYSTEM");
                 userRepository.save(root);
                 System.out.println("==================================");
                 System.out.println("已创建默认root用户");
@@ -64,7 +65,7 @@ public class AuthService {
         if (userRepository.existsByUsername(username)) {
             throw new IllegalArgumentException("用户名已存在");
         }
-        User user = new User(username, passwordEncoder.encode(password), role);
+        User user = new User(username, passwordEncoder.encode(password), role, operatorUsername);
         User saved = userRepository.save(user);
         logOperation(null, operatorUsername, "CREATE_USER", username, "创建用户，角色: " + role);
         return saved;
@@ -78,56 +79,30 @@ public class AuthService {
         return userRepository.findAll();
     }
 
-    public User updateUserRole(Long userId, String newRole, String operatorUsername, String operatorRole) {
-        if (!"ROOT".equals(operatorRole) && !"ADMIN".equals(operatorRole)) {
-            throw new IllegalArgumentException("无权限修改用户角色");
-        }
-        if (newRole == null || (!"USER".equals(newRole) && !"ADMIN".equals(newRole))) {
-            throw new IllegalArgumentException("无效角色，仅支持 USER 或 ADMIN");
-        }
-
-        User target = userRepository.findById(userId).orElseThrow(() -> new IllegalArgumentException("用户不存在"));
-
-        if ("ROOT".equals(target.getRole())) {
-            throw new IllegalArgumentException("无法修改 ROOT 用户角色");
-        }
-
-        if (operatorUsername != null && operatorUsername.equals(target.getUsername())) {
-            throw new IllegalArgumentException("不能修改自身角色");
-        }
-
-        if ("ADMIN".equals(operatorRole)) {
-            if ("ADMIN".equals(target.getRole())) {
-                throw new IllegalArgumentException("管理员无法修改其他管理员的角色");
-            }
-            if (!"USER".equals(target.getRole())) {
-                throw new IllegalArgumentException("管理员只能修改普通用户的角色");
-            }
-            if (!"USER".equals(newRole)) {
-                throw new IllegalArgumentException("管理员仅能将用户设为 USER");
-            }
-        }
-
-        if ("ROOT".equals(operatorRole)) {
-            // ROOT 可任免 ADMIN / USER（目标不可为 ROOT，上面已拦截）
-        }
-
-        target.setRole(newRole);
-        User saved = userRepository.save(target);
-        logOperation(null, operatorUsername != null ? operatorUsername : operatorRole, "UPDATE_ROLE", target.getUsername(), "角色修改为: " + newRole);
-        return saved;
+    public List<User> getUsersForAdmin(String adminUsername) {
+        return userRepository.findAll().stream()
+                .filter(u -> adminUsername.equals(u.getCreatedBy()) || adminUsername.equals(u.getUsername()))
+                .collect(Collectors.toList());
     }
 
-    public void deleteUser(Long userId, String operatorRole) {
-        if (!"ROOT".equals(operatorRole)) {
-            throw new IllegalArgumentException("仅ROOT可删除用户");
+    public void deleteUser(Long userId, String operatorRole, String operatorUsername) {
+        if (!"ROOT".equals(operatorRole) && !"ADMIN".equals(operatorRole)) {
+            throw new IllegalArgumentException("无权限删除用户");
         }
         User user = userRepository.findById(userId).orElseThrow(() -> new IllegalArgumentException("用户不存在"));
         if ("ROOT".equals(user.getRole())) {
             throw new IllegalArgumentException("无法删除ROOT用户");
         }
+        if ("ADMIN".equals(operatorRole)) {
+            if ("ADMIN".equals(user.getRole())) {
+                throw new IllegalArgumentException("管理员无法删除其他管理员");
+            }
+            if (!operatorUsername.equals(user.getCreatedBy())) {
+                throw new IllegalArgumentException("只能删除自己创建的用户");
+            }
+        }
         userRepository.deleteById(userId);
-        logOperation(null, operatorRole, "DELETE_USER", user.getUsername(), "删除用户");
+        logOperation(null, operatorUsername, "DELETE_USER", user.getUsername(), "删除用户");
     }
 
     public void changePassword(String username, String oldPassword, String newPassword) {
@@ -159,8 +134,16 @@ public class AuthService {
     }
 
     public List<OperationLog> getOperationLogs(String role, String username) {
-        if ("ROOT".equals(role) || "ADMIN".equals(role)) {
+        if ("ROOT".equals(role)) {
             return operationLogRepository.findAllByOrderByCreatedAtDesc();
+        }
+        if ("ADMIN".equals(role)) {
+            List<User> myUsers = userRepository.findByCreatedBy(username);
+            List<String> visibleUsernames = myUsers.stream().map(User::getUsername).collect(Collectors.toList());
+            visibleUsernames.add(username);
+            return operationLogRepository.findAllByOrderByCreatedAtDesc().stream()
+                    .filter(l -> l.getUsername() == null || visibleUsernames.contains(l.getUsername()))
+                    .collect(Collectors.toList());
         }
         return operationLogRepository.findByUsernameOrderByCreatedAtDesc(username);
     }

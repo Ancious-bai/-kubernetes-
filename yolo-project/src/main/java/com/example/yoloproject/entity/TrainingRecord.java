@@ -47,9 +47,6 @@ public class TrainingRecord {
     @Column(name = "created_by")
     private String createdBy;
 
-    @Column(nullable = false)
-    private Integer priority = 5;
-
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
@@ -73,7 +70,6 @@ public class TrainingRecord {
         this.imgsz = imgsz;
         this.recordName = dataName + "-e" + epochs + "-i" + imgsz;
         this.createdBy = createdBy;
-        this.priority = 5;
         this.createdAt = LocalDateTime.now();
     }
 
@@ -103,8 +99,6 @@ public class TrainingRecord {
     public void setTestStatus(String testStatus) { this.testStatus = testStatus; }
     public String getCreatedBy() { return createdBy; }
     public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
-    public Integer getPriority() { return priority; }
-    public void setPriority(Integer priority) { this.priority = priority; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public String getTrainLogFile() { return trainLogFile; }

@@ -21,6 +21,9 @@ public class Dataset {
     @Column(name = "created_by")
     private String createdBy;
 
+    @Column(name = "size_bytes")
+    private Long sizeBytes;
+
     public Dataset() {}
 
     public Dataset(String name, String inputPath, String createdBy) {
@@ -40,4 +43,6 @@ public class Dataset {
     public void setPreprocessed(Boolean preprocessed) { this.preprocessed = preprocessed; }
     public String getCreatedBy() { return createdBy; }
     public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
+    public Long getSizeBytes() { return sizeBytes; }
+    public void setSizeBytes(Long sizeBytes) { this.sizeBytes = sizeBytes; }
 }

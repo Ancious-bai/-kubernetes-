@@ -46,15 +46,23 @@ public class JwtAuthFilter implements Filter {
         }
 
         String authHeader = httpRequest.getHeader("Authorization");
+        String token = null;
+
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            String token = authHeader.substring(7);
-            if (jwtUtil.isTokenValid(token)) {
-                httpRequest.setAttribute("userId", jwtUtil.getUserId(token));
-                httpRequest.setAttribute("username", jwtUtil.getUsername(token));
-                httpRequest.setAttribute("role", jwtUtil.getRole(token));
-                chain.doFilter(request, response);
-                return;
+            token = authHeader.substring(7);
+        } else {
+            String queryToken = httpRequest.getParameter("token");
+            if (queryToken != null && !queryToken.isEmpty()) {
+                token = queryToken;
             }
+        }
+
+        if (token != null && jwtUtil.isTokenValid(token)) {
+            httpRequest.setAttribute("userId", jwtUtil.getUserId(token));
+            httpRequest.setAttribute("username", jwtUtil.getUsername(token));
+            httpRequest.setAttribute("role", jwtUtil.getRole(token));
+            chain.doFilter(request, response);
+            return;
         }
 
         httpResponse.setStatus(HttpServletResponse.SC_UNAUTHORIZED);

@@ -6,6 +6,8 @@ import com.example.yoloproject.entity.Dataset;
 import com.example.yoloproject.entity.TrainingRecord;
 import com.example.yoloproject.repository.DatasetRepository;
 import com.example.yoloproject.repository.TrainingRecordRepository;
+import com.example.yoloproject.repository.NodeLogRepository;
+import com.example.yoloproject.repository.ModelLibraryRepository;
 import io.kubernetes.client.openapi.models.V1Job;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,6 +65,12 @@ public class YoloService {
 
     @Autowired
     private K8sClientService k8sClientService;
+
+    @Autowired
+    private NodeLogRepository nodeLogRepository;
+
+    @Autowired
+    private ModelLibraryRepository modelLibraryRepository;
 
     private String PROJECT_ROOT;
     public String LOGS_DIR;
@@ -384,11 +392,16 @@ public class YoloService {
                 Thread.sleep(1000);
 
                 String effectivePvc = usePvc ? pvcName : null;
+
+                Map<String, String> testResources = calculateDynamicResources(dataName, 1, imgsz);
+
                 V1Job job = k8sClientService.buildTestJob(
                         recordName + "-test-job", dataName, recordName,
-                        imgsz, trainingImage,
+                        1, imgsz, trainingImage,
                         effectivePvc, mountPath,
-                        targetNode, null
+                        targetNode, null,
+                        testResources.get("cpuRequest"), testResources.get("cpuLimit"),
+                        testResources.get("memRequest"), testResources.get("memLimit")
                 );
                 k8sClientService.createJob(job);
                 log.info("Test job created: {}", testJobName);
@@ -504,11 +517,16 @@ public class YoloService {
                 Thread.sleep(1000);
 
                 String effectivePvc = usePvc ? pvcName : null;
+
+                Map<String, String> dynamicResources = calculateDynamicResources(dataName, epochs, imgsz);
+
                 V1Job job = k8sClientService.buildTrainingJob(
                         effectiveRecordName + "-train-job", dataName, effectiveRecordName,
                         epochs, imgsz, trainingImage,
                         effectivePvc, mountPath,
-                        nodeName, nodeSelector, gpuResources
+                        nodeName, nodeSelector, gpuResources,
+                        dynamicResources.get("cpuRequest"), dynamicResources.get("cpuLimit"),
+                        dynamicResources.get("memRequest"), dynamicResources.get("memLimit")
                 );
                 k8sClientService.createJob(job);
                 log.info("Distributed training job created: {} on node {}", trainJobName, nodeName);
@@ -698,6 +716,13 @@ public class YoloService {
             transactionTemplate.executeWithoutResult(status -> {
                 trainingRecordRepository.deleteByDataName(dataName);
                 datasetRepository.findByName(dataName).ifPresent(datasetRepository::delete);
+                for (String recName : recordNames) {
+                    nodeLogRepository.findByRecordName(recName).forEach(nodeLogRepository::delete);
+                }
+                modelLibraryRepository.findByDataName(dataName).forEach(ml -> {
+                    try { new File(ml.getModelPath()).delete(); } catch (Exception e) {}
+                    modelLibraryRepository.delete(ml);
+                });
             });
             logBuilder.append("Database deleted: dataset ").append(dataName).append(" and related training_records\n");
 
@@ -773,7 +798,14 @@ public class YoloService {
         }
 
         try {
-            transactionTemplate.executeWithoutResult(status -> trainingRecordRepository.deleteByRecordName(recordName));
+            transactionTemplate.executeWithoutResult(status -> {
+                trainingRecordRepository.deleteByRecordName(recordName);
+                nodeLogRepository.findByRecordName(recordName).forEach(nodeLogRepository::delete);
+                modelLibraryRepository.findByRecordName(recordName).forEach(ml -> {
+                    try { new File(ml.getModelPath()).delete(); } catch (Exception e) {}
+                    modelLibraryRepository.delete(ml);
+                });
+            });
         } catch (Exception e) {
             throw new IllegalStateException("Failed to delete training record: " + e.getMessage(), e);
         }
@@ -922,6 +954,8 @@ public class YoloService {
                 }
             }
             trainingRecordRepository.deleteAll();
+            nodeLogRepository.deleteAll();
+            modelLibraryRepository.deleteAll();
 
             for (Dataset ds : allDatasets) {
                 try {
@@ -1088,6 +1122,88 @@ public class YoloService {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private Map<String, String> calculateDynamicResources(String dataName, int epochs, int imgsz) {
+        Map<String, String> resources = new HashMap<>();
+
+        long datasetSizeBytes = 0;
+        try {
+            Dataset dataset = datasetRepository.findByName(dataName).orElse(null);
+            if (dataset != null && dataset.getSizeBytes() != null) {
+                datasetSizeBytes = dataset.getSizeBytes();
+            } else {
+                String dataDir = projectRoot + dataName;
+                File dir = new File(dataDir);
+                if (dir.exists()) {
+                    datasetSizeBytes = getDirectorySize(dir);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to get dataset size for {}: {}", dataName, e.getMessage());
+        }
+
+        long datasetSizeMB = datasetSizeBytes / (1024 * 1024);
+
+        String cpuRequest, cpuLimit, memRequest, memLimit;
+
+        if (datasetSizeMB < 50) {
+            cpuRequest = "250m"; cpuLimit = "1";
+            memRequest = "512Mi"; memLimit = "2Gi";
+        } else if (datasetSizeMB < 500) {
+            cpuRequest = "500m"; cpuLimit = "2";
+            memRequest = "1Gi"; memLimit = "4Gi";
+        } else if (datasetSizeMB < 2000) {
+            cpuRequest = "1"; cpuLimit = "3";
+            memRequest = "2Gi"; memLimit = "8Gi";
+        } else if (datasetSizeMB < 10000) {
+            cpuRequest = "2"; cpuLimit = "4";
+            memRequest = "4Gi"; memLimit = "12Gi";
+        } else {
+            cpuRequest = "2"; cpuLimit = "4";
+            memRequest = "4Gi"; memLimit = "16Gi";
+        }
+
+        if (imgsz > 640) {
+            String currentMemLimit = memLimit.replaceAll("[^0-9]", "");
+            String currentMemUnit = memLimit.replaceAll("[0-9]", "");
+            long memLimitVal = Long.parseLong(currentMemLimit);
+            if ("Gi".equals(currentMemUnit)) memLimitVal *= 1024;
+            memLimitVal = (long)(memLimitVal * 1.5);
+            if (memLimitVal >= 1024) {
+                memLimit = (memLimitVal / 1024) + "Gi";
+            } else {
+                memLimit = memLimitVal + "Mi";
+            }
+        }
+
+        if (epochs > 100) {
+            String currentCpuLimit = cpuLimit.replaceAll("[^0-9]", "");
+            int cpuLimitVal = Integer.parseInt(currentCpuLimit);
+            cpuLimit = Math.max(cpuLimitVal, 2) + "";
+        }
+
+        resources.put("cpuRequest", cpuRequest);
+        resources.put("cpuLimit", cpuLimit);
+        resources.put("memRequest", memRequest);
+        resources.put("memLimit", memLimit);
+
+        log.info("Dynamic resources for {} ({}MB, epochs={}, imgsz={}): cpu={}/{}, mem={}/{}",
+                dataName, datasetSizeMB, epochs, imgsz, cpuRequest, cpuLimit, memRequest, memLimit);
+
+        return resources;
+    }
+
+    private long getDirectorySize(File dir) {
+        long size = 0;
+        if (dir.isFile()) return dir.length();
+        File[] files = dir.listFiles();
+        if (files != null) {
+            for (File f : files) {
+                size += f.isDirectory() ? getDirectorySize(f) : f.length();
+            }
+        }
+        return size;
     }
 
     private int parseEpochProgress(String logContent) {

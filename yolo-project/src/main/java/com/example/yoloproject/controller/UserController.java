@@ -26,12 +26,19 @@ public class UserController {
             @RequestParam(required = false) String role,
             HttpServletRequest httpRequest) {
         String currentRole = (String) httpRequest.getAttribute("role");
+        String currentUsername = (String) httpRequest.getAttribute("username");
         if (!authService.isAdminOrAbove(currentRole)) {
             Map<String, String> response = new HashMap<>();
             response.put("message", "无权限查看用户列表");
             return ResponseEntity.status(403).body(response);
         }
-        List<User> users = authService.getAllUsers();
+
+        List<User> users;
+        if ("ROOT".equals(currentRole)) {
+            users = authService.getAllUsers();
+        } else {
+            users = authService.getUsersForAdmin(currentUsername);
+        }
 
         if (search != null && !search.trim().isEmpty()) {
             String keyword = search.trim().toLowerCase();
@@ -48,32 +55,13 @@ public class UserController {
         return ResponseEntity.ok(users);
     }
 
-    @PutMapping("/{id}/role")
-    public ResponseEntity<Map<String, Object>> updateUserRole(
-            @PathVariable Long id,
-            @RequestBody Map<String, String> request,
-            HttpServletRequest httpRequest) {
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Map<String, Object>> deleteUser(@PathVariable Long id, HttpServletRequest httpRequest) {
         String operatorRole = (String) httpRequest.getAttribute("role");
         String operatorUsername = (String) httpRequest.getAttribute("username");
         Map<String, Object> response = new HashMap<>();
         try {
-            authService.updateUserRole(id, request.get("role"), operatorUsername, operatorRole);
-            response.put("message", "角色更新成功");
-            response.put("status", "success");
-            return ResponseEntity.ok(response);
-        } catch (IllegalArgumentException e) {
-            response.put("message", e.getMessage());
-            response.put("status", "error");
-            return ResponseEntity.badRequest().body(response);
-        }
-    }
-
-    @DeleteMapping("/{id}")
-    public ResponseEntity<Map<String, Object>> deleteUser(@PathVariable Long id, HttpServletRequest httpRequest) {
-        String operatorRole = (String) httpRequest.getAttribute("role");
-        Map<String, Object> response = new HashMap<>();
-        try {
-            authService.deleteUser(id, operatorRole);
+            authService.deleteUser(id, operatorRole, operatorUsername);
             response.put("message", "用户已删除");
             response.put("status", "success");
             return ResponseEntity.ok(response);
@@ -95,22 +83,6 @@ public class UserController {
         String currentUsername = (String) httpRequest.getAttribute("username");
 
         List<OperationLog> logs = authService.getOperationLogs(role, currentUsername);
-
-        if ("ADMIN".equals(role)) {
-            logs = logs.stream()
-                    .filter(log -> {
-                        String logUser = log.getUsername();
-                        if (logUser == null || logUser.isEmpty()) return true;
-                        if (currentUsername.equals(logUser)) return true;
-                        try {
-                            User u = authService.getUserByUsername(logUser);
-                            return u != null && "USER".equals(u.getRole());
-                        } catch (Exception e) {
-                            return false;
-                        }
-                    })
-                    .collect(Collectors.toList());
-        }
 
         if (username != null && !username.trim().isEmpty()) {
             String kw = username.trim().toLowerCase();

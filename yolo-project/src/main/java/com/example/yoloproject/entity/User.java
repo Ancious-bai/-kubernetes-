@@ -20,6 +20,9 @@ public class User {
     @Column(nullable = false, length = 20)
     private String role = "USER";
 
+    @Column(name = "created_by")
+    private String createdBy;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
@@ -33,6 +36,14 @@ public class User {
         this.createdAt = LocalDateTime.now();
     }
 
+    public User(String username, String password, String role, String createdBy) {
+        this.username = username;
+        this.password = password;
+        this.role = role;
+        this.createdBy = createdBy;
+        this.createdAt = LocalDateTime.now();
+    }
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public String getUsername() { return username; }
@@ -41,6 +52,8 @@ public class User {
     public void setPassword(String password) { this.password = password; }
     public String getRole() { return role; }
     public void setRole(String role) { this.role = role; }
+    public String getCreatedBy() { return createdBy; }
+    public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 }

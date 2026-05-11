@@ -467,6 +467,7 @@ public class K8sClientService {
         V1ResourceRequirements resources = new V1ResourceRequirements();
         Map<String, Quantity> requests = new HashMap<>();
         Map<String, Quantity> limits = new HashMap<>();
+
         requests.put("cpu", new Quantity("500m"));
         requests.put("memory", new Quantity("1Gi"));
         limits.put("cpu", new Quantity("2"));
@@ -498,6 +499,17 @@ public class K8sClientService {
                                    String pvcName, String mountPath,
                                    String nodeName, Map<String, String> nodeSelector,
                                    Map<String, String> gpuResources) {
+        return buildTrainingJob(jobName, dataName, recordName, epochs, imgsz, imageName,
+                pvcName, mountPath, nodeName, nodeSelector, gpuResources, null, null, null, null);
+    }
+
+    public V1Job buildTrainingJob(String jobName, String dataName, String recordName,
+                                   int epochs, int imgsz, String imageName,
+                                   String pvcName, String mountPath,
+                                   String nodeName, Map<String, String> nodeSelector,
+                                   Map<String, String> gpuResources,
+                                   String cpuRequest, String cpuLimit,
+                                   String memRequest, String memLimit) {
         V1Job job = new V1Job();
 
         V1ObjectMeta metadata = new V1ObjectMeta();
@@ -602,6 +614,16 @@ public class K8sClientService {
                                int imgsz, String imageName,
                                String pvcName, String mountPath,
                                String nodeName, Map<String, String> nodeSelector) {
+        return buildTestJob(jobName, dataName, recordName, 0, imgsz, imageName,
+                pvcName, mountPath, nodeName, nodeSelector, null, null, null, null);
+    }
+
+    public V1Job buildTestJob(String jobName, String dataName, String recordName,
+                               int epochs, int imgsz, String imageName,
+                               String pvcName, String mountPath,
+                               String nodeName, Map<String, String> nodeSelector,
+                               String cpuRequest, String cpuLimit,
+                               String memRequest, String memLimit) {
         V1Job job = new V1Job();
 
         V1ObjectMeta metadata = new V1ObjectMeta();
@@ -665,10 +687,10 @@ public class K8sClientService {
         V1ResourceRequirements resources = new V1ResourceRequirements();
         Map<String, Quantity> requests = new HashMap<>();
         Map<String, Quantity> limits = new HashMap<>();
-        requests.put("cpu", new Quantity("500m"));
-        requests.put("memory", new Quantity("1Gi"));
-        limits.put("cpu", new Quantity("2"));
-        limits.put("memory", new Quantity("4Gi"));
+        requests.put("cpu", new Quantity(cpuRequest != null ? cpuRequest : "500m"));
+        requests.put("memory", new Quantity(memRequest != null ? memRequest : "1Gi"));
+        limits.put("cpu", new Quantity(cpuLimit != null ? cpuLimit : "2"));
+        limits.put("memory", new Quantity(memLimit != null ? memLimit : "4Gi"));
         resources.setRequests(requests);
         resources.setLimits(limits);
         container.setResources(resources);

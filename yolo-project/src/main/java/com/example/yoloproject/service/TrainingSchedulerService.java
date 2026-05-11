@@ -50,9 +50,8 @@ public class TrainingSchedulerService {
     private volatile int defaultImgsz = 640;
     private volatile String schedulingMode = "auto";
 
-    private final PriorityQueue<TrainingTask> taskQueue = new PriorityQueue<>(
-        Comparator.comparingInt(TrainingTask::getPriority)
-            .thenComparingLong(TrainingTask::getSubmitTime)
+    private final PriorityBlockingQueue<TrainingTask> taskQueue = new PriorityBlockingQueue<>(
+        11, Comparator.comparingLong(TrainingTask::getSubmitTime)
     );
 
     private final Set<TrainingTask> runningTasks = ConcurrentHashMap.newKeySet();
@@ -107,8 +106,77 @@ public class TrainingSchedulerService {
         if (candidates.isEmpty()) return null;
 
         return candidates.stream()
-                .min(Comparator.comparingInt(n -> getRunningTaskCountOnNode(n.getNodeName())))
+                .max(Comparator.comparingDouble(this::calculateNodeScore))
                 .orElse(null);
+    }
+
+    private double calculateNodeScore(NodeInfo node) {
+        double score = 0;
+
+        int runningOnNode = getRunningTaskCountOnNode(node.getNodeName());
+        int maxConcurrent = node.getMaxConcurrentTasks() != null ? node.getMaxConcurrentTasks() : 1;
+        int remainingSlots = Math.max(0, maxConcurrent - runningOnNode);
+        score += remainingSlots * 30;
+
+        try {
+            Map<String, Object> allocated = k8sClientService.getNodeAllocatedResources(node.getNodeName());
+            double cpuRequested = ((Number) allocated.getOrDefault("cpuRequested", 0)).doubleValue();
+            double memoryRequestedMB = ((Number) allocated.getOrDefault("memoryRequestedMB", 0)).doubleValue();
+            double gpuRequested = ((Number) allocated.getOrDefault("gpuRequested", 0)).doubleValue();
+
+            double cpuTotal = parseCpuToCores(node.getCpuAllocatable());
+            double memTotalMB = parseMemoryToMB(node.getMemoryAllocatable());
+            double gpuTotal = parseGpuCount(node.getGpuAllocatable());
+
+            double cpuRemaining = Math.max(0, cpuTotal - cpuRequested);
+            double memRemainingMB = Math.max(0, memTotalMB - memoryRequestedMB);
+            double gpuRemaining = Math.max(0, gpuTotal - gpuRequested);
+
+            score += cpuRemaining * 10;
+            score += (memRemainingMB / 1024.0) * 5;
+            score += gpuRemaining * 50;
+        } catch (Exception e) {
+            log.warn("Failed to get allocated resources for node {}, fallback to slot-based scoring: {}",
+                    node.getNodeName(), e.getMessage());
+            score += remainingSlots * 20;
+        }
+
+        return score;
+    }
+
+    private double parseCpuToCores(String cpuStr) {
+        if (cpuStr == null || cpuStr.isEmpty()) return 2.0;
+        try {
+            String s = cpuStr.trim();
+            if (s.endsWith("m")) {
+                return Double.parseDouble(s.substring(0, s.length() - 1)) / 1000.0;
+            }
+            return Double.parseDouble(s);
+        } catch (NumberFormatException e) {
+            return 2.0;
+        }
+    }
+
+    private double parseMemoryToMB(String memStr) {
+        if (memStr == null || memStr.isEmpty()) return 4096.0;
+        try {
+            String s = memStr.trim();
+            if (s.endsWith("Ki")) return Double.parseDouble(s.substring(0, s.length() - 2)) / 1024.0;
+            if (s.endsWith("Mi")) return Double.parseDouble(s.substring(0, s.length() - 2));
+            if (s.endsWith("Gi")) return Double.parseDouble(s.substring(0, s.length() - 2)) * 1024;
+            return Double.parseDouble(s) / (1024.0 * 1024.0);
+        } catch (NumberFormatException e) {
+            return 4096.0;
+        }
+    }
+
+    private double parseGpuCount(String gpuStr) {
+        if (gpuStr == null || gpuStr.isEmpty()) return 0;
+        try {
+            return Double.parseDouble(gpuStr.trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private void loadDefaultEpochsFromDB() {
@@ -191,16 +259,11 @@ public class TrainingSchedulerService {
         return schedulingMode;
     }
 
-    public synchronized void addTask(String dataName, Integer epochs, Integer imgsz, String username, Integer priority) {
-        addTask(dataName, epochs, imgsz, username, priority, null, null, null);
-    }
-
     public synchronized void addTask(String dataName, Integer epochs, Integer imgsz, String username,
-                                      Integer priority, String targetNode, Map<String, String> nodeSelector,
+                                      String targetNode, Map<String, String> nodeSelector,
                                       Map<String, String> gpuResources) {
         int taskEpochs = (epochs != null && epochs > 0) ? epochs : defaultEpochs;
         int taskImgsz = (imgsz != null && imgsz > 0) ? imgsz : defaultImgsz;
-        int taskPriority = (priority != null && priority >= 1 && priority <= 10) ? priority : 5;
         String recordName = dataName + "-e" + taskEpochs + "-i" + taskImgsz;
 
         for (TrainingTask task : taskQueue) {
@@ -228,15 +291,7 @@ public class TrainingSchedulerService {
         Map<String, String> effectiveNodeSelector = nodeSelector;
         Map<String, String> effectiveGpuResources = gpuResources;
 
-        if ("auto".equals(schedulingMode) && effectiveNode == null) {
-            NodeInfo selectedNode = selectNodeForTask(gpuResources);
-            if (selectedNode != null) {
-                effectiveNode = selectedNode.getNodeName();
-                log.info("Auto-scheduling: task {} assigned to node {}", recordName, effectiveNode);
-            }
-        }
-
-        TrainingTask task = new TrainingTask(dataName, taskPriority, taskEpochs, taskImgsz, recordName,
+        TrainingTask task = new TrainingTask(dataName, taskEpochs, taskImgsz, recordName,
                 effectiveNode, effectiveNodeSelector, effectiveGpuResources);
         taskQueue.add(task);
 
@@ -245,12 +300,11 @@ public class TrainingSchedulerService {
             record = new TrainingRecord(dataName, taskEpochs, taskImgsz, username != null ? username : "system");
         }
         record.setTrainStatus("QUEUED");
-        record.setPriority(taskPriority);
         trainingRecordRepository.save(record);
 
         taskStatusMap.put(recordName, "QUEUED");
-        log.info("Task added to queue: {}, priority: {}, epochs: {}, imgsz: {}, node: {}",
-                recordName, taskPriority, taskEpochs, taskImgsz, effectiveNode);
+        log.info("Task added to queue: {}, epochs: {}, imgsz: {}, node: {}",
+                recordName, taskEpochs, taskImgsz, effectiveNode);
         notifyNewTask();
     }
 
@@ -272,30 +326,6 @@ public class TrainingSchedulerService {
         throw new IllegalArgumentException("任务不在队列中: " + recordName);
     }
 
-    public synchronized void updatePriority(String recordName, int newPriority) {
-        if (newPriority < 1 || newPriority > 10) {
-            throw new IllegalArgumentException("优先级必须在1-10之间");
-        }
-        for (TrainingTask task : taskQueue) {
-            if (task.getRecordName().equals(recordName)) {
-                task.setPriority(newPriority);
-                reorderQueue();
-                break;
-            }
-        }
-        trainingRecordRepository.findByRecordName(recordName).ifPresent(r -> {
-            r.setPriority(newPriority);
-            trainingRecordRepository.save(r);
-        });
-        log.info("Task priority updated: {} -> {}", recordName, newPriority);
-    }
-
-    private void reorderQueue() {
-        List<TrainingTask> tasks = new ArrayList<>(taskQueue);
-        taskQueue.clear();
-        taskQueue.addAll(tasks);
-    }
-
     public String getTaskStatus(String recordName) {
         return taskStatusMap.getOrDefault(recordName, "IDLE");
     }
@@ -312,7 +342,6 @@ public class TrainingSchedulerService {
             status.put("dataName", task.getDataName());
             status.put("recordName", task.getRecordName());
             status.put("status", "RUNNING");
-            status.put("priority", task.getPriority());
             status.put("progress", taskProgressMap.getOrDefault(task.getRecordName(), 0));
             status.put("position", "running");
             status.put("assignedNode", task.getTargetNode());
@@ -320,14 +349,13 @@ public class TrainingSchedulerService {
         }
 
         List<TrainingTask> tasks = new ArrayList<>(taskQueue);
-        Collections.sort(tasks, Comparator.comparingInt(TrainingTask::getPriority));
+        Collections.sort(tasks, Comparator.comparingLong(TrainingTask::getSubmitTime));
         int position = 1;
         for (TrainingTask task : tasks) {
             Map<String, Object> status = new HashMap<>();
             status.put("dataName", task.getDataName());
             status.put("recordName", task.getRecordName());
             status.put("status", "QUEUED");
-            status.put("priority", task.getPriority());
             status.put("progress", taskProgressMap.getOrDefault(task.getRecordName(), 0));
             status.put("position", position++);
             status.put("assignedNode", task.getTargetNode());
@@ -378,6 +406,13 @@ public class TrainingSchedulerService {
                                 trainingRecordRepository.save(r);
                             });
                             taskStatusMap.put(task.getRecordName(), "RUNNING");
+                            try {
+                                nodeManagementService.recordNodeLog(task.getTargetNode(), task.getRecordName(),
+                                        task.getDataName(), "train", "RUNNING", task.getEpochs(),
+                                        task.getImgsz(), null);
+                            } catch (Exception e) {
+                                log.warn("Failed to record node log: {}", e.getMessage());
+                            }
                             workerExecutor.submit(() -> executeTask(task));
                             scheduledAny = true;
                         } else {
@@ -457,6 +492,12 @@ public class TrainingSchedulerService {
             } catch (Exception e) {
                 log.warn("Failed to save train log for {}: {}", recordName, e.getMessage());
             }
+            try {
+                String finalStatus = taskStatusMap.getOrDefault(recordName, "UNKNOWN");
+                nodeManagementService.updateNodeLogFinished(recordName, finalStatus);
+            } catch (Exception e) {
+                log.warn("Failed to update node log for {}: {}", recordName, e.getMessage());
+            }
             synchronized (this) {
                 runningTasks.remove(task);
                 taskStatusMap.remove(recordName);
@@ -516,7 +557,6 @@ public class TrainingSchedulerService {
 
     private static class TrainingTask {
         private final String dataName;
-        private int priority;
         private final int epochs;
         private final int imgsz;
         private final String recordName;
@@ -525,10 +565,9 @@ public class TrainingSchedulerService {
         private final Map<String, String> gpuResources;
         private final long submitTime;
 
-        public TrainingTask(String dataName, int priority, int epochs, int imgsz, String recordName,
+        public TrainingTask(String dataName, int epochs, int imgsz, String recordName,
                             String targetNode, Map<String, String> nodeSelector, Map<String, String> gpuResources) {
             this.dataName = dataName;
-            this.priority = priority;
             this.epochs = epochs;
             this.imgsz = imgsz;
             this.recordName = recordName;
@@ -539,8 +578,6 @@ public class TrainingSchedulerService {
         }
 
         public String getDataName() { return dataName; }
-        public int getPriority() { return priority; }
-        public void setPriority(int priority) { this.priority = priority; }
         public int getEpochs() { return epochs; }
         public int getImgsz() { return imgsz; }
         public String getRecordName() { return recordName; }

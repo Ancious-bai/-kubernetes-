@@ -1,7 +1,9 @@
 package com.example.yoloproject.service;
 
 import com.example.yoloproject.entity.NodeInfo;
+import com.example.yoloproject.entity.NodeLog;
 import com.example.yoloproject.repository.NodeInfoRepository;
+import com.example.yoloproject.repository.NodeLogRepository;
 import io.kubernetes.client.openapi.models.V1Node;
 import io.kubernetes.client.openapi.models.V1NodeAddress;
 import io.kubernetes.client.openapi.models.V1NodeCondition;
@@ -25,6 +27,9 @@ public class NodeManagementService {
 
     @Autowired
     private K8sClientService k8sClientService;
+
+    @Autowired
+    private NodeLogRepository nodeLogRepository;
 
     public List<NodeInfo> getAllNodes() {
         List<NodeInfo> nodes = nodeInfoRepository.findAll();
@@ -69,17 +74,40 @@ public class NodeManagementService {
         }
 
         return candidates.stream()
-                .min(Comparator.comparingInt(this::getCurrentTrainingLoad))
+                .max(Comparator.comparingDouble(this::calculateNodeScoreForSelection))
                 .orElse(candidates.get(0));
     }
 
-    private int getCurrentTrainingLoad(NodeInfo node) {
+    private double calculateNodeScoreForSelection(NodeInfo node) {
+        double score = 0;
+
         try {
             Map<String, Object> allocated = k8sClientService.getNodeAllocatedResources(node.getNodeName());
-            return (int) allocated.getOrDefault("runningPods", 0);
+            double cpuRequested = ((Number) allocated.getOrDefault("cpuRequested", 0)).doubleValue();
+            double memoryRequestedMB = ((Number) allocated.getOrDefault("memoryRequestedMB", 0)).doubleValue();
+            double gpuRequested = ((Number) allocated.getOrDefault("gpuRequested", 0)).doubleValue();
+            int runningPods = ((Number) allocated.getOrDefault("runningPods", 0)).intValue();
+
+            double cpuTotal = parseCpuCores(node.getCpuAllocatable());
+            double memTotalMB = parseMemoryMB(node.getMemoryAllocatable());
+            double gpuTotal = parseGpuCount(node.getGpuAllocatable());
+            int maxConcurrent = node.getMaxConcurrentTasks() != null ? node.getMaxConcurrentTasks() : 1;
+
+            double cpuRemaining = Math.max(0, cpuTotal - cpuRequested);
+            double memRemainingMB = Math.max(0, memTotalMB - memoryRequestedMB);
+            double gpuRemaining = Math.max(0, gpuTotal - gpuRequested);
+            int remainingSlots = Math.max(0, maxConcurrent - runningPods);
+
+            score += remainingSlots * 30;
+            score += cpuRemaining * 10;
+            score += (memRemainingMB / 1024.0) * 5;
+            score += gpuRemaining * 50;
         } catch (Exception e) {
-            return Integer.MAX_VALUE;
+            log.warn("Failed to calculate score for node {}: {}", node.getNodeName(), e.getMessage());
+            score = 0;
         }
+
+        return score;
     }
 
     @Scheduled(fixedDelay = 30000)
@@ -98,15 +126,15 @@ public class NodeManagementService {
 
                 NodeInfo dbNode = nodeInfoRepository.findByNodeName(nodeName).orElse(new NodeInfo(nodeName));
                 updateNodeFromCluster(dbNode, nodeInfo);
+                calculateDynamicConcurrent(dbNode);
                 nodeInfoRepository.save(dbNode);
             }
 
             List<NodeInfo> dbNodes = nodeInfoRepository.findAll();
             for (NodeInfo dbNode : dbNodes) {
                 if (!clusterNodeNames.contains(dbNode.getNodeName())) {
-                    dbNode.setReady(false);
-                    dbNode.setLastHeartbeat(LocalDateTime.now());
-                    nodeInfoRepository.save(dbNode);
+                    nodeInfoRepository.delete(dbNode);
+                    log.info("Removed node {} from database (no longer in cluster)", dbNode.getNodeName());
                 }
             }
 
@@ -175,6 +203,91 @@ public class NodeManagementService {
             }
         }
         return "0";
+    }
+
+    private void calculateDynamicConcurrent(NodeInfo node) {
+        int cpuCores = parseCpuCores(node.getCpuAllocatable());
+        long memoryMB = parseMemoryMB(node.getMemoryAllocatable());
+        boolean isMaster = node.getRoles() != null &&
+                (node.getRoles().contains("control-plane") || node.getRoles().contains("master"));
+        boolean hasGpu = node.getGpuAllocatable() != null && !"0".equals(node.getGpuAllocatable());
+
+        int systemReservedCores = isMaster ? 2 : 1;
+        long systemReservedMB = isMaster ? 2048 : 1024;
+
+        int availableCores = Math.max(1, cpuCores - systemReservedCores);
+        long availableMB = Math.max(512, memoryMB - systemReservedMB);
+
+        int coresBasedConcurrent = Math.max(1, availableCores);
+        int memoryBasedConcurrent = Math.max(1, (int) (availableMB / 1024));
+
+        int concurrent = Math.min(coresBasedConcurrent, memoryBasedConcurrent);
+
+        if (isMaster) {
+            concurrent = Math.min(concurrent, 1);
+        }
+
+        if (hasGpu) {
+            int gpuCount = parseGpuCount(node.getGpuAllocatable());
+            if (gpuCount > 0) {
+                concurrent = Math.min(concurrent, Math.max(1, gpuCount));
+            }
+        }
+
+        concurrent = Math.max(1, concurrent);
+
+        int oldConcurrent = node.getMaxConcurrentTasks() != null ? node.getMaxConcurrentTasks() : 1;
+        if (oldConcurrent != concurrent) {
+            log.info("Dynamic concurrent for node {}: {} -> {} (cpuCores={}, memMB={}, isMaster={}, hasGpu={})",
+                    node.getNodeName(), oldConcurrent, concurrent, cpuCores, memoryMB, isMaster, hasGpu);
+        }
+        node.setMaxConcurrentTasks(concurrent);
+    }
+
+    private int parseCpuCores(String cpuStr) {
+        if (cpuStr == null || cpuStr.isEmpty()) return 2;
+        try {
+            String s = cpuStr.trim();
+            if (s.endsWith("m")) {
+                return Math.max(1, Integer.parseInt(s.substring(0, s.length() - 1)) / 1000);
+            }
+            double val = Double.parseDouble(s);
+            return Math.max(1, (int) val);
+        } catch (NumberFormatException e) {
+            return 2;
+        }
+    }
+
+    private long parseMemoryMB(String memStr) {
+        if (memStr == null || memStr.isEmpty()) return 4096;
+        try {
+            String s = memStr.trim();
+            if (s.endsWith("Ki")) {
+                return Long.parseLong(s.substring(0, s.length() - 2)) / 1024;
+            } else if (s.endsWith("Mi")) {
+                return Long.parseLong(s.substring(0, s.length() - 2));
+            } else if (s.endsWith("Gi")) {
+                return Long.parseLong(s.substring(0, s.length() - 2)) * 1024;
+            } else if (s.endsWith("K") || s.endsWith("k")) {
+                return Long.parseLong(s.substring(0, s.length() - 1)) / 1000;
+            } else if (s.endsWith("M") || s.endsWith("m")) {
+                return Long.parseLong(s.substring(0, s.length() - 1));
+            } else if (s.endsWith("G") || s.endsWith("g")) {
+                return Long.parseLong(s.substring(0, s.length() - 1)) * 1000;
+            }
+            return Long.parseLong(s) / (1024 * 1024);
+        } catch (NumberFormatException e) {
+            return 4096;
+        }
+    }
+
+    private int parseGpuCount(String gpuStr) {
+        if (gpuStr == null || gpuStr.isEmpty()) return 0;
+        try {
+            return Integer.parseInt(gpuStr.trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     public Map<String, Object> getNodeDetailedResources(String nodeName) {
@@ -253,5 +366,52 @@ public class NodeManagementService {
         overview.put("workerNodes", readyNodes.stream().filter(n -> n.getRoles() != null && n.getRoles().contains("worker") && !n.getRoles().contains("control-plane") && !n.getRoles().contains("master")).count());
 
         return overview;
+    }
+
+    public NodeLog recordNodeLog(String nodeName, String recordName, String dataName,
+                                  String taskType, String status, Integer epochs, Integer imgsz,
+                                  String createdBy) {
+        NodeLog nodeLog = new NodeLog();
+        nodeLog.setNodeName(nodeName);
+        nodeLog.setRecordName(recordName);
+        nodeLog.setDataName(dataName);
+        nodeLog.setTaskType(taskType);
+        nodeLog.setStatus(status);
+        nodeLog.setEpochs(epochs);
+        nodeLog.setImgsz(imgsz);
+        nodeLog.setCreatedBy(createdBy);
+        nodeLog.setStartedAt(LocalDateTime.now());
+        return nodeLogRepository.save(nodeLog);
+    }
+
+    public void updateNodeLogFinished(String recordName, String status) {
+        List<NodeLog> logs = nodeLogRepository.findByRecordName(recordName);
+        for (NodeLog nodeLog : logs) {
+            if (nodeLog.getFinishedAt() == null) {
+                nodeLog.setFinishedAt(LocalDateTime.now());
+                nodeLog.setStatus(status);
+                nodeLogRepository.save(nodeLog);
+            }
+        }
+    }
+
+    public void updateNodeLogResources(String recordName, String cpuUsage, String memoryUsage, String gpuUsage) {
+        List<NodeLog> logs = nodeLogRepository.findByRecordName(recordName);
+        for (NodeLog nodeLog : logs) {
+            if (nodeLog.getFinishedAt() == null) {
+                nodeLog.setCpuUsage(cpuUsage);
+                nodeLog.setMemoryUsage(memoryUsage);
+                nodeLog.setGpuUsage(gpuUsage);
+                nodeLogRepository.save(nodeLog);
+            }
+        }
+    }
+
+    public List<NodeLog> getNodeLogs(String nodeName) {
+        return nodeLogRepository.findByNodeNameOrderByStartedAtDesc(nodeName);
+    }
+
+    public List<NodeLog> getAllNodeLogs() {
+        return nodeLogRepository.findAllByOrderByStartedAtDesc();
     }
 }
