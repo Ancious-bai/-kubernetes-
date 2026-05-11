@@ -4,6 +4,7 @@ import com.example.yoloproject.entity.NodeInfo;
 import com.example.yoloproject.entity.NodeLog;
 import com.example.yoloproject.repository.NodeInfoRepository;
 import com.example.yoloproject.repository.NodeLogRepository;
+import com.example.yoloproject.repository.TrainingRecordRepository;
 import io.kubernetes.client.openapi.models.V1Node;
 import io.kubernetes.client.openapi.models.V1NodeAddress;
 import io.kubernetes.client.openapi.models.V1NodeCondition;
@@ -32,6 +33,9 @@ public class NodeManagementService {
     @Autowired
     private NodeLogRepository nodeLogRepository;
 
+    @Autowired
+    private TrainingRecordRepository trainingRecordRepository;
+
     @PostConstruct
     public void init() {
         new Thread(() -> {
@@ -52,6 +56,24 @@ public class NodeManagementService {
                 try {
                     int trainingPods = k8sClientService.getTrainingPodCountOnNode(node.getNodeName());
                     node.setCurrentTasks(trainingPods);
+
+                    Map<String, Object> allocated = k8sClientService.getNodeAllocatedResources(node.getNodeName());
+                    double cpuUsed = ((Number) allocated.getOrDefault("cpuRequested", 0)).doubleValue();
+                    double memUsedMB = ((Number) allocated.getOrDefault("memoryRequestedMB", 0)).doubleValue();
+                    double gpuUsed = ((Number) allocated.getOrDefault("gpuRequested", 0)).doubleValue();
+
+                    double cpuTotal = parseCpuCores(node.getCpuAllocatable());
+                    long memTotalMB = parseMemoryMB(node.getMemoryAllocatable());
+                    double gpuTotal = parseGpuCount(node.getGpuAllocatable());
+
+                    node.setCpuRemaining(Math.max(0, cpuTotal - cpuUsed));
+                    node.setMemRemainingMB(Math.max(0, memTotalMB - memUsedMB));
+                    node.setGpuRemaining(Math.max(0, gpuTotal - gpuUsed));
+
+                    double weightedScore = Math.max(0, cpuTotal - cpuUsed) * 10
+                            + Math.max(0, memTotalMB - memUsedMB) / 1024.0 * 5
+                            + Math.max(0, gpuTotal - gpuUsed) * 50;
+                    node.setWeightedScore(weightedScore);
                 } catch (Exception e) {
                     node.setCurrentTasks(0);
                 }
@@ -220,7 +242,7 @@ public class NodeManagementService {
     }
 
     private void calculateDynamicConcurrent(NodeInfo node) {
-        int cpuCores = parseCpuCores(node.getCpuAllocatable());
+        double cpuCores = parseCpuCores(node.getCpuAllocatable());
         long memoryMB = parseMemoryMB(node.getMemoryAllocatable());
         boolean isMaster = node.getRoles() != null &&
                 (node.getRoles().contains("control-plane") || node.getRoles().contains("master"));
@@ -229,7 +251,7 @@ public class NodeManagementService {
         int systemReservedCores = isMaster ? 2 : 1;
         long systemReservedMB = isMaster ? 2048 : 1024;
 
-        int availableCores = Math.max(1, cpuCores - systemReservedCores);
+        int availableCores = Math.max(1, (int) cpuCores - systemReservedCores);
         long availableMB = Math.max(512, memoryMB - systemReservedMB);
 
         int coresBasedConcurrent = Math.max(1, availableCores);
@@ -258,17 +280,16 @@ public class NodeManagementService {
         node.setMaxConcurrentTasks(concurrent);
     }
 
-    private int parseCpuCores(String cpuStr) {
-        if (cpuStr == null || cpuStr.isEmpty()) return 2;
+    private double parseCpuCores(String cpuStr) {
+        if (cpuStr == null || cpuStr.isEmpty()) return 2.0;
         try {
             String s = cpuStr.trim();
             if (s.endsWith("m")) {
-                return Math.max(1, Integer.parseInt(s.substring(0, s.length() - 1)) / 1000);
+                return Double.parseDouble(s.substring(0, s.length() - 1)) / 1000.0;
             }
-            double val = Double.parseDouble(s);
-            return Math.max(1, (int) val);
+            return Double.parseDouble(s);
         } catch (NumberFormatException e) {
-            return 2;
+            return 2.0;
         }
     }
 
@@ -332,6 +353,64 @@ public class NodeManagementService {
             result.put("memoryRequestedMB", allocated.get("memoryRequestedMB"));
             result.put("gpuRequested", allocated.get("gpuRequested"));
             result.put("runningPods", allocated.get("runningPods"));
+
+            double cpuTotal = parseCpuCores(node.getCpuAllocatable());
+            long memTotalMB = parseMemoryMB(node.getMemoryAllocatable());
+            double cpuUsed = ((Number) allocated.getOrDefault("cpuRequested", 0)).doubleValue();
+            double memUsedMB = ((Number) allocated.getOrDefault("memoryRequestedMB", 0)).doubleValue();
+            double gpuTotal = parseGpuCount(node.getGpuAllocatable());
+            double gpuUsed = ((Number) allocated.getOrDefault("gpuRequested", 0)).doubleValue();
+
+            result.put("cpuTotalCores", cpuTotal);
+            result.put("memTotalMB", memTotalMB);
+            result.put("gpuTotal", gpuTotal);
+            result.put("cpuRemaining", Math.max(0, cpuTotal - cpuUsed));
+            result.put("memRemainingMB", Math.max(0, memTotalMB - memUsedMB));
+            result.put("gpuRemaining", Math.max(0, gpuTotal - gpuUsed));
+
+            double weightedScore = Math.max(0, cpuTotal - cpuUsed) * 10
+                    + Math.max(0, memTotalMB - memUsedMB) / 1024.0 * 5
+                    + Math.max(0, gpuTotal - gpuUsed) * 50;
+            result.put("weightedResourceScore", String.format("%.1f", weightedScore));
+        }
+
+        return result;
+    }
+
+    public Map<String, Object> getNodeFullDetail(String nodeName) {
+        Map<String, Object> result = getNodeDetailedResources(nodeName);
+        if (result.containsKey("error")) return result;
+
+        if (k8sClientService.isReady()) {
+            List<Map<String, Object>> pods = k8sClientService.getNodePodDetails(nodeName);
+            result.put("pods", pods);
+
+            List<Map<String, Object>> trainingPods = pods.stream()
+                    .filter(p -> Boolean.TRUE.equals(p.get("isTrainingPod")))
+                    .collect(Collectors.toList());
+
+            for (Map<String, Object> pod : trainingPods) {
+                String jobName = (String) pod.getOrDefault("jobName", "");
+                if (!jobName.isEmpty()) {
+                    String recordName = jobName.replaceAll("-train-job$", "").replaceAll("-test-job$", "").replaceAll("-preprocess-job$", "");
+                    pod.put("recordName", recordName);
+                    try {
+                        com.example.yoloproject.entity.TrainingRecord record =
+                                trainingRecordRepository != null ?
+                                trainingRecordRepository.findByRecordName(recordName).orElse(null) : null;
+                        if (record != null) {
+                            pod.put("createdBy", record.getCreatedBy());
+                            pod.put("epochs", record.getEpochs());
+                            pod.put("imgsz", record.getImgsz());
+                        }
+                    } catch (Exception e) {
+                        // ignore
+                    }
+                }
+            }
+
+            result.put("trainingPods", trainingPods);
+            result.put("trainingPodCount", trainingPods.size());
         }
 
         return result;

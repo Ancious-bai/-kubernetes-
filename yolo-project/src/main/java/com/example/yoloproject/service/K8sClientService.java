@@ -328,6 +328,82 @@ public class K8sClientService {
         return roles;
     }
 
+    public List<Map<String, Object>> getNodePodDetails(String nodeName) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        try {
+            V1PodList pods = coreApi.listPodForAllNamespaces()
+                    .fieldSelector("spec.nodeName=" + nodeName + ",status.phase!=Failed,status.phase!=Succeeded")
+                    .execute();
+
+            if (pods != null && pods.getItems() != null) {
+                for (V1Pod pod : pods.getItems()) {
+                    Map<String, Object> podInfo = new HashMap<>();
+                    podInfo.put("podName", pod.getMetadata().getName());
+                    podInfo.put("namespace", pod.getMetadata().getNamespace());
+                    podInfo.put("phase", pod.getStatus() != null ? pod.getStatus().getPhase() : "Unknown");
+                    podInfo.put("startTime", pod.getStatus() != null && pod.getStatus().getStartTime() != null
+                            ? pod.getStatus().getStartTime().toString() : null);
+
+                    String jobName = "";
+                    String jobType = "";
+                    String creator = "";
+                    if (pod.getMetadata().getLabels() != null) {
+                        jobName = pod.getMetadata().getLabels().getOrDefault("job-name", "");
+                        String site = pod.getMetadata().getLabels().getOrDefault("site", "");
+                        String type = pod.getMetadata().getLabels().getOrDefault("type", "");
+                        jobType = type;
+                        if (!site.isEmpty()) {
+                            podInfo.put("dataName", site);
+                        }
+                    }
+                    podInfo.put("jobName", jobName);
+                    podInfo.put("jobType", jobType);
+
+                    double cpuRequest = 0, cpuLimit = 0, memRequestMB = 0, memLimitMB = 0;
+                    double gpuRequest = 0, gpuLimit = 0;
+                    if (pod.getSpec() != null && pod.getSpec().getContainers() != null) {
+                        for (V1Container container : pod.getSpec().getContainers()) {
+                            if (container.getResources() != null) {
+                                if (container.getResources().getRequests() != null) {
+                                    for (Map.Entry<String, Quantity> entry : container.getResources().getRequests().entrySet()) {
+                                        String key = entry.getKey();
+                                        String value = entry.getValue().toSuffixedString();
+                                        if ("cpu".equals(key)) cpuRequest += parseCpu(value);
+                                        else if ("memory".equals(key)) memRequestMB += parseMemory(value);
+                                        else if (key.contains("gpu") || key.contains("nvidia.com")) gpuRequest += Double.parseDouble(value);
+                                    }
+                                }
+                                if (container.getResources().getLimits() != null) {
+                                    for (Map.Entry<String, Quantity> entry : container.getResources().getLimits().entrySet()) {
+                                        String key = entry.getKey();
+                                        String value = entry.getValue().toSuffixedString();
+                                        if ("cpu".equals(key)) cpuLimit += parseCpu(value);
+                                        else if ("memory".equals(key)) memLimitMB += parseMemory(value);
+                                        else if (key.contains("gpu") || key.contains("nvidia.com")) gpuLimit += Double.parseDouble(value);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    podInfo.put("cpuRequest", cpuRequest);
+                    podInfo.put("cpuLimit", cpuLimit);
+                    podInfo.put("memRequestMB", memRequestMB);
+                    podInfo.put("memLimitMB", memLimitMB);
+                    podInfo.put("gpuRequest", gpuRequest);
+                    podInfo.put("gpuLimit", gpuLimit);
+
+                    podInfo.put("isTrainingPod", pod.getMetadata().getLabels() != null
+                            && "yolo-training".equals(pod.getMetadata().getLabels().get("app")));
+
+                    result.add(podInfo);
+                }
+            }
+        } catch (ApiException e) {
+            log.error("Failed to get pod details for node {}: {}", nodeName, e.getMessage());
+        }
+        return result;
+    }
+
     public Map<String, Object> getNodeAllocatedResources(String nodeName) {
         Map<String, Object> result = new HashMap<>();
         try {
@@ -575,10 +651,10 @@ public class K8sClientService {
         Map<String, Quantity> requests = new HashMap<>();
         Map<String, Quantity> limits = new HashMap<>();
 
-        requests.put("cpu", new Quantity("500m"));
-        requests.put("memory", new Quantity("1Gi"));
-        limits.put("cpu", new Quantity("2"));
-        limits.put("memory", new Quantity("4Gi"));
+        requests.put("cpu", new Quantity(cpuRequest != null ? cpuRequest : "500m"));
+        requests.put("memory", new Quantity(memRequest != null ? memRequest : "1Gi"));
+        limits.put("cpu", new Quantity(cpuLimit != null ? cpuLimit : "2"));
+        limits.put("memory", new Quantity(memLimit != null ? memLimit : "4Gi"));
 
         if (gpuResources != null && !gpuResources.isEmpty()) {
             for (Map.Entry<String, String> entry : gpuResources.entrySet()) {

@@ -47,6 +47,10 @@ public class NodeController {
                 filtered.setGpuAllocatable(n.getGpuAllocatable());
                 filtered.setCurrentTasks(n.getCurrentTasks());
                 filtered.setMaxConcurrentTasks(n.getMaxConcurrentTasks());
+                filtered.setCpuRemaining(n.getCpuRemaining());
+                filtered.setMemRemainingMB(n.getMemRemainingMB());
+                filtered.setGpuRemaining(n.getGpuRemaining());
+                filtered.setWeightedScore(n.getWeightedScore());
                 return filtered;
             }).collect(Collectors.toList());
         }
@@ -65,7 +69,7 @@ public class NodeController {
         if (!"ROOT".equals(role) && !"ADMIN".equals(role)) {
             return ResponseEntity.status(403).build();
         }
-        Map<String, Object> detail = nodeManagementService.getNodeDetailedResources(nodeName);
+        Map<String, Object> detail = nodeManagementService.getNodeFullDetail(nodeName);
         if (detail.containsKey("error")) {
             return ResponseEntity.status(404).body(detail);
         }

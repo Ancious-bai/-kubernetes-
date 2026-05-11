@@ -49,12 +49,11 @@
           <el-card shadow="hover" class="top-card config-card">
             <template #header><span class="card-title">全局配置</span></template>
             <div class="config-row">
-              <div class="cfg-item"><span class="cfg-label">Epochs</span><el-input-number v-model="defaultEpochs" :min="1" :max="1000" size="small" style="width:100px" /><el-button type="primary" size="small" @click="handleDefaultEpochsChange(defaultEpochs)">保存</el-button></div>
-              <div class="cfg-item"><span class="cfg-label">Imgsz</span><el-input-number v-model="defaultImgsz" :min="32" :max="1280" :step="32" size="small" style="width:120px" /><el-button type="primary" size="small" @click="handleDefaultImgszChange(defaultImgsz)">保存</el-button></div>
+              <div class="cfg-item"><span class="cfg-label">Epochs</span><el-input-number v-model="defaultEpochs" :min="1" :max="1000" size="small" style="width:100px" @change="handleDefaultEpochsChange" /></div>
+              <div class="cfg-item"><span class="cfg-label">Imgsz</span><el-input-number v-model="defaultImgsz" :min="32" :max="1280" :step="32" size="small" style="width:120px" @change="handleDefaultImgszChange" /></div>
             </div>
             <div class="config-row" style="margin-top:8px">
               <div class="cfg-item"><span class="cfg-label">调度模式</span><el-select v-model="schedulingMode" size="small" style="width:100px" @change="handleSchedulingModeChange"><el-option label="自动" value="auto" /><el-option label="手动" value="manual" /></el-select></div>
-              <div class="cfg-item"><span class="cfg-label">训练镜像</span><el-input v-model="trainingImage" size="small" style="width:200px" placeholder="镜像名称" /><el-button type="primary" size="small" @click="handleTrainingImageChange">保存</el-button></div>
             </div>
           </el-card>
         </div>
@@ -226,45 +225,71 @@
           <el-card shadow="hover" class="overview-card"><div class="overview-value">{{ clusterOverview.totalNodes || 0 }}</div><div class="overview-label">总节点数</div></el-card>
           <el-card shadow="hover" class="overview-card overview-ready"><div class="overview-value">{{ clusterOverview.readyNodes || 0 }}</div><div class="overview-label">就绪节点</div></el-card>
           <el-card shadow="hover" class="overview-card overview-gpu"><div class="overview-value">{{ clusterOverview.gpuNodes || 0 }}</div><div class="overview-label">GPU节点</div></el-card>
-          <el-card shadow="hover" class="overview-card overview-concurrent"><div class="overview-value">{{ totalMaxConcurrent }}</div><div class="overview-label">最大并发</div></el-card>
-          <el-card shadow="hover" class="overview-card overview-remaining"><div class="overview-value">{{ totalRemainingSlots }}</div><div class="overview-label">剩余可用</div></el-card>
+          <el-card shadow="hover" class="overview-card overview-concurrent"><div class="overview-value">{{ totalCpuRemaining }}</div><div class="overview-label">CPU剩余(核)</div></el-card>
+          <el-card shadow="hover" class="overview-card overview-remaining"><div class="overview-value">{{ totalMemRemainingGB }}</div><div class="overview-label">内存剩余(GB)</div></el-card>
         </div>
 
-        <el-card shadow="hover" style="margin-top:14px">
-          <div style="overflow-x:auto">
-            <table class="records-table">
-              <thead><tr>
-                <th class="col-nname">节点名称</th>
-                <th v-if="isAdmin" class="col-nip">IP地址</th>
-                <th class="col-nrole">角色</th>
-                <th class="col-nstatus">状态</th>
-                <th v-if="isAdmin" class="col-nsched">可调度</th>
-                <th class="col-ncpu">CPU</th>
-                <th class="col-nmem">内存</th>
-                <th class="col-ngpu">GPU</th>
-                <th v-if="isAdmin" class="col-nconc">并发数</th>
-                <th class="col-ntasks">当前任务</th>
-                <th class="col-nremain">剩余</th>
-                <th v-if="isAdmin" class="col-nact">操作</th>
-              </tr></thead>
-              <tbody>
-                <tr v-for="row in clusterNodes" :key="row.nodeName">
-                  <td><span>{{ row.nodeName }}</span></td>
-                  <td v-if="isAdmin"><span>{{ row.nodeIp }}</span></td>
-                  <td><el-tag :type="row.roles&&row.roles.includes('control-plane')?'danger':'primary'" size="small">{{ row.roles&&row.roles.includes('control-plane')?'Master':'Worker' }}</el-tag></td>
-                  <td><el-tag :type="row.ready?'success':'danger'" size="small">{{ row.ready?'就绪':'未就绪' }}</el-tag></td>
-                  <td v-if="isAdmin"><el-tag :type="row.schedulable?'success':'warning'" size="small">{{ row.schedulable?'是':'否' }}</el-tag></td>
-                  <td><span>{{ row.cpuAllocatable }}</span></td>
-                  <td><span>{{ formatMemory(row.memoryAllocatable) }}</span></td>
-                  <td><span>{{ row.gpuAllocatable }}</span></td>
-                  <td v-if="isAdmin"><span>{{ row.maxConcurrentTasks || 1 }}</span></td>
-                  <td><el-tag size="small" type="warning">{{ row.currentTasks || 0 }}</el-tag></td>
-                  <td><el-tag :type="(row.remainingSlots||0)>0?'success':'danger'" size="small">{{ row.remainingSlots || 0 }}</el-tag></td>
-                  <td v-if="isAdmin"><div class="record-actions"><el-button v-if="row.schedulable" size="small" type="warning" @click="cordonNode(row.nodeName)">停止调度</el-button><el-button v-else size="small" type="success" @click="uncordonNode(row.nodeName)">恢复调度</el-button></div></td>
-                </tr>
-              </tbody>
-            </table>
+        <el-card shadow="hover" v-for="row in clusterNodes" :key="row.nodeName" style="margin-top:14px">
+          <template #header>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-weight:700;font-size:15px">{{ row.nodeName }}</span>
+                <el-tag :type="row.roles&&row.roles.includes('control-plane')?'danger':'primary'" size="small">{{ row.roles&&row.roles.includes('control-plane')?'Master':'Worker' }}</el-tag>
+                <el-tag :type="row.ready?'success':'danger'" size="small">{{ row.ready?'就绪':'未就绪' }}</el-tag>
+                <el-tag v-if="isAdmin" :type="row.schedulable?'success':'warning'" size="small">{{ row.schedulable?'可调度':'已停止' }}</el-tag>
+                <span v-if="isAdmin" style="color:#909399;font-size:12px">{{ row.nodeIp }}</span>
+              </div>
+              <div v-if="isAdmin" class="record-actions">
+                <el-button v-if="row.schedulable" size="small" type="warning" @click="cordonNode(row.nodeName)">停止调度</el-button>
+                <el-button v-else size="small" type="success" @click="uncordonNode(row.nodeName)">恢复调度</el-button>
+              </div>
+            </div>
+          </template>
+
+          <div class="node-resource-grid">
+            <div class="node-res-item">
+              <div class="node-res-label">CPU</div>
+              <div class="node-res-bar"><el-progress :percentage="row.cpuAllocatable?Math.round(((row.cpuAllocatable?parseFloat(row.cpuAllocatable):0)-(row.cpuRemaining||0))/parseFloat(row.cpuAllocatable)*100):0" :stroke-width="14" :color="row.cpuRemaining<1?'#f56c6c':'#409eff'" /></div>
+              <div class="node-res-detail">总量 {{ row.cpuAllocatable }} / 剩余 <span :style="{color:row.cpuRemaining<1?'#f56c6c':'#67c23a',fontWeight:600}">{{ (row.cpuRemaining||0).toFixed(1) }}</span> 核</div>
+            </div>
+            <div class="node-res-item">
+              <div class="node-res-label">内存</div>
+              <div class="node-res-bar"><el-progress :percentage="row.memoryAllocatable?Math.round(((formatMemoryMB(row.memoryAllocatable))-(row.memRemainingMB||0))/formatMemoryMB(row.memoryAllocatable)*100):0" :stroke-width="14" :color="row.memRemainingMB<1024?'#f56c6c':'#67c23a'" /></div>
+              <div class="node-res-detail">总量 {{ formatMemory(row.memoryAllocatable) }} / 剩余 <span :style="{color:row.memRemainingMB<1024?'#f56c6c':'#67c23a',fontWeight:600}">{{ ((row.memRemainingMB||0)/1024).toFixed(1) }}GB</span></div>
+            </div>
+            <div class="node-res-item">
+              <div class="node-res-label">GPU</div>
+              <div class="node-res-bar"><el-progress :percentage="row.gpuAllocatable&&row.gpuAllocatable!=='0'?Math.round(((parseFloat(row.gpuAllocatable))-(row.gpuRemaining||0))/parseFloat(row.gpuAllocatable)*100):0" :stroke-width="14" color="#e6a23c" /></div>
+              <div class="node-res-detail">总量 {{ row.gpuAllocatable||'0' }} / 剩余 <span style="font-weight:600">{{ (row.gpuRemaining||0).toFixed(0) }}</span></div>
+            </div>
+            <div class="node-res-item">
+              <div class="node-res-label">加权资源分</div>
+              <div class="node-res-score">{{ (row.weightedScore||0).toFixed(1) }}</div>
+              <div class="node-res-detail">CPU×10 + 内存(GB)×5 + GPU×50</div>
+            </div>
           </div>
+
+          <div v-if="nodeDetailMap[row.nodeName] && nodeDetailMap[row.nodeName].trainingPods && nodeDetailMap[row.nodeName].trainingPods.length" style="margin-top:12px">
+            <h4 style="margin:0 0 8px;font-size:13px;color:#606266">运行中的训练任务</h4>
+            <div style="overflow-x:auto">
+              <table class="records-table" style="font-size:12px">
+                <thead><tr><th>Pod名称</th><th>类型</th><th>数据集</th><th>创建者</th><th>CPU请求/上限</th><th>内存请求/上限(MB)</th><th>GPU</th><th>启动时间</th></tr></thead>
+                <tbody>
+                  <tr v-for="pod in nodeDetailMap[row.nodeName].trainingPods" :key="pod.podName">
+                    <td><span style="font-size:11px">{{ pod.podName }}</span></td>
+                    <td><el-tag :type="pod.jobType==='train'?'warning':pod.jobType==='test'?'success':'info'" size="small">{{ pod.jobType==='train'?'训练':pod.jobType==='test'?'测试':'预处理' }}</el-tag></td>
+                    <td><span>{{ pod.dataName || '-' }}</span></td>
+                    <td><span>{{ pod.createdBy || '-' }}</span></td>
+                    <td><span>{{ (pod.cpuRequest||0).toFixed(1) }} / {{ (pod.cpuLimit||0).toFixed(1) }}</span></td>
+                    <td><span>{{ (pod.memRequestMB||0).toFixed(0) }} / {{ (pod.memLimitMB||0).toFixed(0) }}</span></td>
+                    <td><span>{{ pod.gpuRequest||0 }}</span></td>
+                    <td><span style="font-size:11px">{{ formatStartTime(pod.startTime) }}</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div v-else style="margin-top:8px;color:#909399;font-size:13px;text-align:center;padding:8px">当前无运行中的训练任务</div>
         </el-card>
 
         <el-card v-if="isAdmin" shadow="hover" style="margin-top:14px">
@@ -391,10 +416,11 @@
       <template #footer><el-button @click="runsFileVisible=false">关闭</el-button></template>
     </el-dialog>
 
-    <el-dialog title="模型推理" v-model="predictDialogVisible" width="500px">
-      <el-form label-width="80px">
+    <el-dialog title="模型推理 - 使用训练好的模型对数据集进行目标检测" v-model="predictDialogVisible" width="560px">
+      <el-form label-width="90px">
         <el-form-item label="模型"><el-tag type="success">{{ predictForm.modelName }}</el-tag></el-form-item>
-        <el-form-item label="数据集"><el-select v-model="predictForm.dataName" placeholder="选择目标数据集" style="width:100%"><el-option v-for="ds in datasetList" :key="ds.name" :label="ds.name" :value="ds.name" /></el-select></el-form-item>
+        <el-form-item label="目标数据集"><el-select v-model="predictForm.dataName" placeholder="选择要进行推理检测的数据集" style="width:100%"><el-option v-for="ds in datasetList" :key="ds.name" :label="ds.name + (ds.preprocessed?' (已预处理)':' (未预处理)')" :value="ds.name" /></el-select></el-form-item>
+        <el-form-item><div style="color:#909399;font-size:12px;line-height:1.6">将使用所选模型对目标数据集中的图片进行推理检测，检测结果将保存到runs目录中。推理完成后可查看标注后的图片结果。</div></el-form-item>
       </el-form>
       <template #footer><el-button @click="predictDialogVisible=false">取消</el-button><el-button type="primary" @click="handlePredict" :loading="predictLoading">开始推理</el-button></template>
     </el-dialog>
@@ -425,7 +451,7 @@ const loginForm=reactive({username:'',password:''})
 const loginLoading=ref(false),loginError=ref('')
 const currentUser=reactive({username:'',role:''})
 const token=ref('')
-const defaultEpochs=ref(2),savedDefaultEpochs=ref(2),defaultImgsz=ref(640),savedDefaultImgsz=ref(640),trainingImage=ref('')
+const defaultEpochs=ref(2),savedDefaultEpochs=ref(2),defaultImgsz=ref(640),savedDefaultImgsz=ref(640)
 const currentStep=ref(''),datasetList=ref([]),deleteConfirmVisible=ref(false),cleanupConfirmVisible=ref(false),cleanupLoading=ref(false),datasetToDelete=ref('')
 const deleteRecordConfirmVisible=ref(false),recordToDelete=ref('')
 const processingStatus=ref({}),testLoadingStatus=ref({}),trainingRecords=ref([]),userList=ref([]),operationLogs=ref([]),showAddUserDialog=ref(false)
@@ -447,6 +473,7 @@ const userSearch=ref(''),userRoleFilter=ref('')
 
 const clusterNodes=ref([]),clusterOverview=reactive({totalNodes:0,readyNodes:0,gpuNodes:0,masterNodes:0,workerNodes:0}),nodesSyncing=ref(false),schedulingMode=ref('auto')
 const nodeLogs=ref([])
+const nodeDetailMap=ref({})
 const runsResultVisible=ref(false),runsResultLoading=ref(false),runsResultData=ref({}),runsResultTitle=ref(''),runsResultCurrentRecord=ref(''),runsResultCurrentType=ref('')
 const runsFileVisible=ref(false),runsFileTitle=ref(''),runsFileContent=ref('')
 const modelList=ref([])
@@ -456,6 +483,8 @@ const showDistributedTrainDialog=ref(false),distributedTrainForm=reactive({dataN
 const schedulableNodes=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable))
 const totalMaxConcurrent=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+(n.maxConcurrentTasks||1),0))
 const totalRemainingSlots=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+(n.remainingSlots||0),0))
+const totalCpuRemaining=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+(n.cpuRemaining||0),0).toFixed(1))
+const totalMemRemainingGB=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+((n.memRemainingMB||0)/1024),0).toFixed(1))
 const workerNodesOnly=computed(()=>clusterNodes.value.filter(n=>!n.roles?.includes('control-plane')&&!n.roles?.includes('master')))
 
 const wsConnections=new Map()
@@ -485,13 +514,12 @@ const switchToUsers=()=>{activePage.value='users';loadUsers()}
 const switchToNodes=()=>{activePage.value='nodes';loadClusterNodes();loadClusterOverview();loadNodeLogs()}
 const loadNodeLogs=async()=>{if(!isAdmin.value)return;try{const r=await api.value.get('/api/nodes/logs');nodeLogs.value=r.data}catch(e){}}
 
-const loadClusterNodes=async()=>{try{const r=await api.value.get('/api/nodes');clusterNodes.value=r.data.map(n=>({...n,currentTasks:n.currentTasks||0,remainingSlots:n.remainingSlots!=null?n.remainingSlots:(n.maxConcurrentTasks||1)-(n.currentTasks||0)}))}catch(e){}}
+const loadClusterNodes=async()=>{try{const r=await api.value.get('/api/nodes');clusterNodes.value=r.data.map(n=>({...n,currentTasks:n.currentTasks||0,remainingSlots:n.remainingSlots!=null?n.remainingSlots:(n.maxConcurrentTasks||1)-(n.currentTasks||0)}));if(isAdmin.value){const detailPromises=clusterNodes.value.map(async n=>{try{const d=await api.value.get(`/api/nodes/${n.nodeName}`);nodeDetailMap.value[n.nodeName]=d.data}catch(e){}});await Promise.all(detailPromises)}}catch(e){}}
 const loadClusterOverview=async()=>{try{const r=await api.value.get('/api/nodes/overview');Object.assign(clusterOverview,r.data)}catch(e){}}
 const syncNodes=async()=>{nodesSyncing.value=true;try{await api.value.post('/api/nodes/sync');await loadClusterNodes();await loadClusterOverview();showMsg('节点同步完成')}catch(e){showMsg('同步失败','error')}finally{nodesSyncing.value=false}}
 const cordonNode=async(name)=>{try{await api.value.post(`/api/nodes/${name}/cordon`);showMsg(`节点 ${name} 已停止调度`);await loadClusterNodes()}catch(e){showMsg('操作失败','error')}}
 const uncordonNode=async(name)=>{try{await api.value.post(`/api/nodes/${name}/uncordon`);showMsg(`节点 ${name} 已恢复调度`);await loadClusterNodes()}catch(e){showMsg('操作失败','error')}}
 const handleSchedulingModeChange=async(v)=>{try{await api.value.post('/api/scheduler/scheduling-mode',{mode:v});showMsg(`调度模式已设为 ${v==='auto'?'自动':'手动'}`)}catch(e){showMsg('更新失败','error')}}
-const handleTrainingImageChange=async()=>{try{await api.value.post('/api/scheduler/training-image',{image:trainingImage.value});showMsg('训练镜像已更新')}catch(e){showMsg('更新失败','error')}}
 
 const showDistributedTrain=(dataName)=>{distributedTrainForm.dataName=dataName;distributedTrainForm.epochs=savedDefaultEpochs.value;distributedTrainForm.imgsz=savedDefaultImgsz.value;distributedTrainForm.targetNode='';distributedTrainForm.gpuType='';distributedTrainForm.gpuCount=1;showDistributedTrainDialog.value=true}
 const confirmDistributedTrain=async()=>{const req={dataName:distributedTrainForm.dataName,epochs:distributedTrainForm.epochs,imgsz:distributedTrainForm.imgsz};if(distributedTrainForm.targetNode)req.targetNode=distributedTrainForm.targetNode;if(distributedTrainForm.gpuType&&distributedTrainForm.gpuCount>0){req.gpuResources={};req.gpuResources[distributedTrainForm.gpuType]=String(distributedTrainForm.gpuCount)}try{const r=await api.value.post('/api/scheduler/add',req);showMsg(r.data.message);showDistributedTrainDialog.value=false;await loadTrainingRecords();const rn=`${distributedTrainForm.dataName}-e${distributedTrainForm.epochs}-i${distributedTrainForm.imgsz}`;trainLogs.value[rn]='';connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){showMsg(e.response?.data?.message||'提交失败','error')}}
@@ -500,7 +528,7 @@ const handleLogin=async()=>{if(loginLoading.value)return;loginLoading.value=true
 
 const handleLogout=()=>{token.value='';currentUser.username='';currentUser.role='';isLoggedIn.value=false;localStorage.removeItem('token');localStorage.removeItem('username');localStorage.removeItem('role');stopAllWs();stopStatusRefresh();stopAllPreprocessTimers();datasetList.value=[];trainingRecords.value=[];userList.value=[];operationLogs.value=[];Object.keys(pendingRecords.value).forEach(k=>delete pendingRecords.value[k]);Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k]);Object.keys(processingStatus.value).forEach(k=>delete processingStatus.value[k]);Object.keys(testLoadingStatus.value).forEach(k=>delete testLoadingStatus.value[k]);currentPage.value=1;total.value=0;activePage.value='main'}
 
-const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs(),loadClusterNodes(),loadModelList()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz;if(r.data.schedulingMode)schedulingMode.value=r.data.schedulingMode;if(r.data.trainingImage)trainingImage.value=r.data.trainingImage}startStatusRefresh()}catch(e){}}
+const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs(),loadClusterNodes(),loadModelList()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz;if(r.data.schedulingMode)schedulingMode.value=r.data.schedulingMode}startStatusRefresh()}catch(e){}}
 
 const loadTrainingRecords=async()=>{try{const oldRecords=[...trainingRecords.value];trainingRecords.value=(await api.value.get('/api/training-records')).data;checkStatusChanges(oldRecords,trainingRecords.value)}catch(e){}}
 const loadUsers=async()=>{try{const params={};if(userSearch.value)params.search=userSearch.value;if(userRoleFilter.value)params.role=userRoleFilter.value;userList.value=(await api.value.get('/api/users',{params})).data}catch(e){}}
@@ -568,8 +596,8 @@ const confirmDelete=async()=>{try{const dn=datasetToDelete.value;const recs=trai
 const handleCleanup=()=>{cleanupConfirmVisible.value=true}
 const confirmCleanup=async()=>{cleanupLoading.value=true;try{await api.value.post('/api/cleanup');await refreshDatasets();await loadTrainingRecords();await loadOperationLogs();showMsg('系统已重置');stopAllWs();Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k])}catch(e){showMsg(e.response?.data?.message||'清理失败','error')}finally{cleanupLoading.value=false;cleanupConfirmVisible.value=false}}
 
-const handleDefaultEpochsChange=async(v)=>{try{await api.value.post('/api/scheduler/default-epochs',{epochs:v});savedDefaultEpochs.value=v;showMsg(`默认Epochs已设为 ${v}`)}catch(e){showMsg('更新失败','error')}}
-const handleDefaultImgszChange=async(v)=>{try{await api.value.post('/api/scheduler/default-imgsz',{imgsz:v});savedDefaultImgsz.value=v;showMsg(`默认Imgsz已设为 ${v}`)}catch(e){showMsg('更新失败','error')}}
+const handleDefaultEpochsChange=async()=>{try{await api.value.post('/api/scheduler/default-epochs',{epochs:defaultEpochs.value});savedDefaultEpochs.value=defaultEpochs.value;showMsg(`默认Epochs已设为 ${defaultEpochs.value}`)}catch(e){showMsg('更新失败','error')}}
+const handleDefaultImgszChange=async()=>{try{await api.value.post('/api/scheduler/default-imgsz',{imgsz:defaultImgsz.value});savedDefaultImgsz.value=defaultImgsz.value;showMsg(`默认Imgsz已设为 ${defaultImgsz.value}`)}catch(e){showMsg('更新失败','error')}}
 
 const handleAddUser=async()=>{if(currentUser.role==='ADMIN')newUserForm.role='USER';try{await api.value.post('/api/auth/register',newUserForm);showAddUserDialog.value=false;newUserForm.username='';newUserForm.password='';newUserForm.role='USER';loadUsers();showMsg('用户创建成功')}catch(e){showMsg(e.response?.data?.message||'创建失败','error')}}
 const handleDeleteUser=(user)=>{userToDelete.value=user;deleteUserConfirmVisible.value=true}
@@ -580,6 +608,8 @@ const handleCurrentChange=v=>{currentPage.value=v}
 const getStatusClass=s=>{if(s==='RUNNING')return'warning';if(s==='QUEUED')return'primary';if(s==='COMPLETED')return'success';if(s==='FAILED')return'danger';return'info'}
 const getStatusText=(s,t)=>{const p=t==='train'?'训练':'测试';if(s==='RUNNING')return p+'中';if(s==='QUEUED')return'排队中';if(s==='COMPLETED')return'已完成';if(s==='FAILED')return'失败';return t==='train'?'未训练':'未测试'}
 const formatMemory=v=>{if(!v)return'-';const s=String(v).trim();let bytes=0;const m=s.match(/^(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti|Pi|Ei|K|M|G|T|P|E)?$/i);if(m){const num=parseFloat(m[1]);const unit=(m[2]||'').toUpperCase();const units={KI:1024,MI:1024*1024,GI:1024*1024*1024,TI:1024*1024*1024*1024,PI:1024*1024*1024*1024*1024,EI:1024*1024*1024*1024*1024*1024,K:1000,M:1000*1000,G:1000*1000*1000,T:1000*1000*1000*1000,P:1000*1000*1000*1000*1000,E:1000*1000*1000*1000*1000*1000};bytes=num*(units[unit]||1)}else{const n=parseInt(s);if(isNaN(n))return v;bytes=n}if(bytes>=1073741824)return(bytes/1073741824).toFixed(1)+'GB';if(bytes>=1048576)return(bytes/1048576).toFixed(0)+'MB';if(bytes>=1024)return(bytes/1024).toFixed(0)+'KB';return bytes+'B'}
+const formatMemoryMB=v=>{if(!v)return 0;const s=String(v).trim();const m=s.match(/^(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti|K|M|G)?$/i);if(m){const num=parseFloat(m[1]);const unit=(m[2]||'').toUpperCase();if(unit==='KI')return num/1024;if(unit==='MI')return num;if(unit==='GI')return num*1024;if(unit==='K')return num/1000;if(unit==='M')return num;if(unit==='G')return num*1000;return num}return parseFloat(s)||0}
+const formatStartTime=v=>{if(!v)return'-';try{const d=new Date(v);const now=new Date();const diff=Math.floor((now-d)/1000);if(diff<60)return diff+'秒前';if(diff<3600)return Math.floor(diff/60)+'分钟前';if(diff<86400)return Math.floor(diff/3600)+'小时前';return d.toLocaleDateString()+' '+d.toLocaleTimeString().slice(0,5)}catch(e){return v}}
 const getCpuCoreCount=row=>{const v=row.cpuAllocatable||row.cpuCapacity||'4';const n=parseInt(v);return isNaN(n)?4:n}
 
 const viewRunsResult=async(recordName,type)=>{runsResultCurrentRecord.value=recordName;runsResultCurrentType.value=type;runsResultTitle.value=`${recordName} - ${type==='train'?'训练':'测试'}结果`;runsResultVisible.value=true;runsResultLoading.value=true;runsResultData.value={};try{const r=await api.value.get(`/api/nodes/runs/${recordName}/${type}`);runsResultData.value=r.data}catch(e){runsResultData.value={exists:false}}finally{runsResultLoading.value=false}}
@@ -695,6 +725,15 @@ onUnmounted(()=>{stopAllWs();stopStatusRefresh();stopAllPreprocessTimers()})
 .overview-remaining .overview-value{color:#67c23a}
 
 .node-concurrent{display:flex;align-items:center;gap:4px;justify-content:center}
+
+.node-resource-grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:14px}
+.node-res-item{background:#f5f7fa;border-radius:8px;padding:12px 14px}
+.node-res-label{font-size:12px;color:#909399;margin-bottom:6px;font-weight:600}
+.node-res-bar{margin-bottom:6px}
+.node-res-detail{font-size:12px;color:#606266}
+.node-res-score{font-size:28px;font-weight:800;color:#409eff;margin-bottom:4px}
+
+@media(max-width:900px){.node-resource-grid{grid-template-columns:1fr 1fr}}
 
 :deep(.el-card){border-radius:12px;border:none}:deep(.el-card__header){padding:12px 18px;border-bottom:1px solid #ebeef5}:deep(.el-card__body){padding:14px 18px}
 :deep(.el-table){font-size:13px}:deep(.el-table th.el-table__cell){background-color:#f5f7fa!important;text-align:center!important}:deep(.el-dialog){border-radius:12px}

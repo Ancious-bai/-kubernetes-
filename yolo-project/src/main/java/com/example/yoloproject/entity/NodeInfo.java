@@ -126,10 +126,34 @@ public class NodeInfo {
     @Transient
     private Integer currentTasks = 0;
 
+    @Transient
+    private Double cpuRemaining;
+
+    @Transient
+    private Double memRemainingMB;
+
+    @Transient
+    private Double gpuRemaining;
+
+    @Transient
+    private Double weightedScore;
+
     public Integer getCurrentTasks() { return currentTasks; }
     public void setCurrentTasks(Integer currentTasks) { this.currentTasks = currentTasks; }
 
     public Integer getRemainingSlots() {
         return Math.max(0, (maxConcurrentTasks != null ? maxConcurrentTasks : 1) - (currentTasks != null ? currentTasks : 0));
     }
+
+    public Double getCpuRemaining() { return cpuRemaining; }
+    public void setCpuRemaining(Double cpuRemaining) { this.cpuRemaining = cpuRemaining; }
+
+    public Double getMemRemainingMB() { return memRemainingMB; }
+    public void setMemRemainingMB(Double memRemainingMB) { this.memRemainingMB = memRemainingMB; }
+
+    public Double getGpuRemaining() { return gpuRemaining; }
+    public void setGpuRemaining(Double gpuRemaining) { this.gpuRemaining = gpuRemaining; }
+
+    public Double getWeightedScore() { return weightedScore; }
+    public void setWeightedScore(Double weightedScore) { this.weightedScore = weightedScore; }
 }

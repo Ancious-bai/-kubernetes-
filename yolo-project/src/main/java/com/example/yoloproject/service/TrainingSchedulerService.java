@@ -298,6 +298,17 @@ public class TrainingSchedulerService {
         TrainingRecord record = trainingRecordRepository.findByRecordName(recordName).orElse(null);
         if (record == null) {
             record = new TrainingRecord(dataName, taskEpochs, taskImgsz, username != null ? username : "system");
+        } else {
+            record.setTrainStatus("QUEUED");
+            record.setTrainJobId(null);
+            record.setTrainPodName(null);
+            record.setTrainProgress(null);
+            record.setTrainLogFile(null);
+            record.setTestJobId(null);
+            record.setTestPodName(null);
+            record.setTestStatus(null);
+            record.setTestLogFile(null);
+            record.setCreatedBy(username != null ? username : "system");
         }
         record.setTrainStatus("QUEUED");
         trainingRecordRepository.save(record);
