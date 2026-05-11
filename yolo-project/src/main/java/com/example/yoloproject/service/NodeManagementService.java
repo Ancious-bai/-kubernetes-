@@ -75,11 +75,28 @@ public class NodeManagementService {
                             + Math.max(0, gpuTotal - gpuUsed) * 50;
                     node.setWeightedScore(weightedScore);
                 } catch (Exception e) {
+                    log.warn("Failed to get resources for node {}: {}", node.getNodeName(), e.getMessage());
                     node.setCurrentTasks(0);
+                    setDefaultRemainingResources(node);
                 }
+            }
+        } else {
+            for (NodeInfo node : nodes) {
+                node.setCurrentTasks(0);
+                setDefaultRemainingResources(node);
             }
         }
         return nodes;
+    }
+
+    private void setDefaultRemainingResources(NodeInfo node) {
+        double cpuTotal = parseCpuCores(node.getCpuAllocatable());
+        long memTotalMB = parseMemoryMB(node.getMemoryAllocatable());
+        double gpuTotal = parseGpuCount(node.getGpuAllocatable());
+        if (node.getCpuRemaining() == null) node.setCpuRemaining(cpuTotal);
+        if (node.getMemRemainingMB() == null) node.setMemRemainingMB((double) memTotalMB);
+        if (node.getGpuRemaining() == null) node.setGpuRemaining(gpuTotal);
+        if (node.getWeightedScore() == null) node.setWeightedScore(cpuTotal * 10 + memTotalMB / 1024.0 * 5 + gpuTotal * 50);
     }
 
     public List<NodeInfo> getReadyNodes() {
@@ -199,18 +216,8 @@ public class NodeManagementService {
             dbNode.setRoles((String) roles);
         }
 
-        boolean k8sSchedulable = !(Boolean) clusterInfo.getOrDefault("unschedulable", false);
-        if (dbNode.getId() == null) {
-            dbNode.setSchedulable(k8sSchedulable);
-        } else if (!dbNode.getSchedulable() && k8sSchedulable) {
-            try {
-                k8sClientService.cordonNode(dbNode.getNodeName(), true);
-            } catch (Exception e) {
-                log.warn("Re-cordon node {} failed: {}", dbNode.getNodeName(), e.getMessage());
-            }
-        } else {
-            dbNode.setSchedulable(k8sSchedulable);
-        }
+        boolean k8sSchedulable = !Boolean.TRUE.equals(clusterInfo.get("unschedulable"));
+        dbNode.setSchedulable(k8sSchedulable);
 
         Map<String, String> capacity = (Map<String, String>) clusterInfo.get("capacity");
         if (capacity != null) {

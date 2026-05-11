@@ -6,13 +6,12 @@ import com.example.yoloproject.service.AuthService;
 import com.example.yoloproject.service.NodeManagementService;
 import com.example.yoloproject.service.YoloService;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -329,6 +328,42 @@ public class NodeController {
             if (child.isDirectory()) {
                 collectFiles(child, path, files);
             }
+        }
+    }
+
+    @GetMapping("/runs/{recordName}/{type}/image")
+    public void getRunsImage(
+            @PathVariable String recordName,
+            @PathVariable String type,
+            @RequestParam String path,
+            HttpServletRequest httpRequest,
+            HttpServletResponse httpResponse) {
+        String projectRoot = yoloService.getProjectRoot();
+        String basePath = projectRoot + "runs/detect/" + recordName + "_" + type;
+        String filePath = basePath + "/" + path;
+
+        try {
+            File file = new File(filePath).getCanonicalFile();
+            File baseDir = new File(basePath).getCanonicalFile();
+            if (!file.getPath().startsWith(baseDir.getPath()) || !file.exists() || !file.isFile()) {
+                httpResponse.setStatus(404);
+                return;
+            }
+
+            String contentType = Files.probeContentType(file.toPath());
+            if (contentType == null) contentType = "application/octet-stream";
+            httpResponse.setContentType(contentType);
+            httpResponse.setContentLengthLong(file.length());
+
+            try (InputStream is = new FileInputStream(file); OutputStream os = httpResponse.getOutputStream()) {
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                while ((bytesRead = is.read(buffer)) != -1) {
+                    os.write(buffer, 0, bytesRead);
+                }
+            }
+        } catch (Exception e) {
+            try { httpResponse.setStatus(500); } catch (Exception ex) {}
         }
     }
 }

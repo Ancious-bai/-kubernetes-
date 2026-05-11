@@ -417,10 +417,12 @@ public class TrainingSchedulerService {
                                 trainingRecordRepository.save(r);
                             });
                             taskStatusMap.put(task.getRecordName(), "RUNNING");
+                            String createdBy = trainingRecordRepository.findByRecordName(task.getRecordName())
+                                    .map(r -> r.getCreatedBy()).orElse(null);
                             try {
                                 nodeManagementService.recordNodeLog(task.getTargetNode(), task.getRecordName(),
                                         task.getDataName(), "train", "RUNNING", task.getEpochs(),
-                                        task.getImgsz(), null);
+                                        task.getImgsz(), createdBy);
                             } catch (Exception e) {
                                 log.warn("Failed to record node log: {}", e.getMessage());
                             }

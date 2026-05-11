@@ -537,7 +537,7 @@
 
     <el-dialog title="修改密码" v-model="showChangePasswordDialog" width="360px"><el-form :model="changePasswordForm" label-width="70px"><el-form-item label="旧密码"><el-input v-model="changePasswordForm.oldPassword" type="password" placeholder="请输入旧密码" /></el-form-item><el-form-item label="新密码"><el-input v-model="changePasswordForm.newPassword" type="password" placeholder="请输入新密码（至少4位）" /></el-form-item><el-form-item label="确认"><el-input v-model="changePasswordForm.confirmPassword" type="password" placeholder="再次输入新密码" /></el-form-item></el-form><template #footer><el-button @click="showChangePasswordDialog=false">取消</el-button><el-button type="primary" @click="handleChangePassword">确认修改</el-button></template></el-dialog>
 
-    <el-dialog :title="runsResultTitle" v-model="runsResultVisible" width="700px" :close-on-click-modal="false">
+    <el-dialog :title="runsResultTitle" v-model="runsResultVisible" width="800px" :close-on-click-modal="false">
       <div v-if="runsResultLoading" style="text-align:center;padding:30px"><el-icon class="is-loading" size="24"><Loading /></el-icon><p>加载中...</p></div>
       <div v-else-if="!runsResultData.exists" style="text-align:center;padding:30px;color:#909399">结果目录不存在</div>
       <div v-else>
@@ -545,6 +545,15 @@
           <h4 style="margin:0 0 8px;font-size:14px;color:#303133">results.csv</h4>
           <div style="max-height:250px;overflow:auto;border:1px solid #ebeef5;border-radius:6px;padding:10px;background:#fafafa">
             <pre style="margin:0;font-size:12px;white-space:pre-wrap;font-family:'Cascadia Code','Fira Code','Consolas',monospace">{{ runsResultData.resultsCsv }}</pre>
+          </div>
+        </div>
+        <div v-if="runsResultImages.length" style="margin-bottom:14px">
+          <h4 style="margin:0 0 8px;font-size:14px;color:#303133">结果图片 ({{ runsResultImages.length }})</h4>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;max-height:400px;overflow:auto">
+            <div v-for="img in runsResultImages" :key="img.path" style="border:1px solid #ebeef5;border-radius:6px;overflow:hidden;cursor:pointer" @click="openRunsImage(img.path)">
+              <img :src="getRunsImageUrl(img.path)" style="width:100%;height:140px;object-fit:cover;display:block" />
+              <div style="padding:4px 8px;font-size:11px;color:#606266;text-overflow:ellipsis;overflow:hidden;white-space:nowrap">{{ img.name }}</div>
+            </div>
           </div>
         </div>
         <h4 style="margin:0 0 8px;font-size:14px;color:#303133">文件列表</h4>
@@ -557,7 +566,10 @@
                 <td><span style="color:#909399;font-size:11px">{{ f.path }}</span></td>
                 <td><el-tag v-if="f.isDirectory" size="small" type="info">目录</el-tag><el-tag v-else-if="f.isImage" size="small" type="success">图片</el-tag><el-tag v-else-if="f.isCsv" size="small" type="warning">CSV</el-tag><el-tag v-else-if="f.isText" size="small">文本</el-tag><el-tag v-else size="small" type="info">文件</el-tag></td>
                 <td><span v-if="!f.isDirectory">{{ (f.size/1024).toFixed(1) }}KB</span></td>
-                <td><el-button v-if="f.isText && !f.isDirectory" size="small" @click="loadRunsFile(runsResultCurrentRecord,runsResultCurrentType,f.path)">查看</el-button></td>
+                <td>
+                  <el-button v-if="f.isImage && !f.isDirectory" size="small" type="primary" @click="openRunsImage(f.path)">查看</el-button>
+                  <el-button v-if="f.isText && !f.isDirectory" size="small" @click="loadRunsFile(runsResultCurrentRecord,runsResultCurrentType,f.path)">查看</el-button>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -646,8 +658,8 @@ const showDistributedTrainDialog=ref(false),distributedTrainForm=reactive({dataN
 const schedulableNodes=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable))
 const totalMaxConcurrent=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+(n.maxConcurrentTasks||1),0))
 const totalRemainingSlots=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+(n.remainingSlots||0),0))
-const totalCpuRemaining=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+(n.cpuRemaining||0),0).toFixed(1))
-const totalMemRemainingGB=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+((n.memRemainingMB||0)/1024),0).toFixed(1))
+const totalCpuRemaining=computed(()=>clusterNodes.value.filter(n=>n.ready).reduce((sum,n)=>sum+(n.cpuRemaining||0),0).toFixed(1))
+const totalMemRemainingGB=computed(()=>clusterNodes.value.filter(n=>n.ready).reduce((sum,n)=>sum+((n.memRemainingMB||0)/1024),0).toFixed(1))
 const systemTotalCpu=computed(()=>systemPods.value.reduce((sum,p)=>sum+(p.cpuRequest||0),0))
 const systemTotalMem=computed(()=>systemPods.value.reduce((sum,p)=>sum+(p.memRequestMB||0),0))
 const systemPodsByNode=computed(()=>{const map={};systemPods.value.forEach(p=>{const n=p.nodeName||'-';if(!map[n])map[n]={nodeName:n,pods:[],cpuRequest:0,memRequestMB:0,types:new Set()};map[n].pods.push(p);map[n].cpuRequest+=p.cpuRequest||0;map[n].memRequestMB+=p.memRequestMB||0;if(p.serviceType)map[n].types.add(p.serviceType)});return Object.values(map).map(nd=>({...nd,types:[...nd.types]}))})
@@ -790,6 +802,9 @@ const getServiceTypeColor=t=>({nfs:'warning',mysql:'danger',backend:'primary',fr
 const getCpuCoreCount=row=>{const v=row.cpuAllocatable||row.cpuCapacity||'4';const n=parseInt(v);return isNaN(n)?4:n}
 
 const viewRunsResult=async(recordName,type)=>{runsResultCurrentRecord.value=recordName;runsResultCurrentType.value=type;runsResultTitle.value=`${recordName} - ${type==='train'?'训练':'测试'}结果`;runsResultVisible.value=true;runsResultLoading.value=true;runsResultData.value={};try{const r=await api.value.get(`/api/nodes/runs/${recordName}/${type}`);runsResultData.value=r.data}catch(e){runsResultData.value={exists:false}}finally{runsResultLoading.value=false}}
+const runsResultImages=computed(()=>{if(!runsResultData.value||!runsResultData.value.files)return[];return runsResultData.value.files.filter(f=>f.isImage&&!f.isDirectory)})
+const getRunsImageUrl=path=>`/api/nodes/runs/${runsResultCurrentRecord.value}/${runsResultCurrentType.value}/image?path=${encodeURIComponent(path)}&token=${token.value}`
+const openRunsImage=path=>{window.open(getRunsImageUrl(path),'_blank')}
 const loadRunsFile=async(recordName,type,path)=>{try{const r=await api.value.get(`/api/nodes/runs/${recordName}/${type}/file`,{params:{path}});if(r.data.content){runsFileTitle.value=r.data.fileName||path;runsFileContent.value=r.data.content;runsFileVisible.value=true}else{showMsg(r.data.error||'文件读取失败','error')}}catch(e){showMsg('文件读取失败','error')}}
 
 const switchToModels=()=>{activePage.value='models';loadModelList();loadInferenceRecords()}
@@ -797,8 +812,8 @@ const loadModelList=async()=>{try{const r=await api.value.get('/api/models');mod
 const showPredictDialog=m=>{predictForm.modelId=m.id;predictForm.modelName=m.modelName;predictForm.dataName='';predictDialogVisible.value=true}
 const handlePredict=async()=>{if(!predictForm.dataName){showMsg('请选择目标数据集','warning');return}predictLoading.value=true;try{const r=await api.value.post(`/api/models/${predictForm.modelId}/predict`,{dataName:predictForm.dataName});if(r.data.status==='success'){showMsg('推理任务已提交');predictDialogVisible.value=false;predictResultModelId.value=predictForm.modelId;predictResultDataName.value=predictForm.dataName;predictResultVisible.value=true;predictResultLoading.value=true;predictResultImages.value=[];pollPredictResults()}}catch(e){showMsg(e.response?.data?.message||'推理失败','error')}finally{predictLoading.value=false}}
 const pollPredictResults=async()=>{const iv=setInterval(async()=>{try{const r=await api.value.get(`/api/models/${predictResultModelId.value}/predict-results`,{params:{dataName:predictResultDataName.value}});if(r.data.exists){predictResultImages.value=r.data.images||[];predictResultLoading.value=false;clearInterval(iv)}}catch(e){}},3000);setTimeout(()=>{clearInterval(iv);predictResultLoading.value=false},60000)}
-const getPredictImageUrl=name=>`/api/models/${predictResultModelId.value}/predict-image?dataName=${encodeURIComponent(predictResultDataName.value)}&imageName=${encodeURIComponent(name)}&token=${token.value}`
-const openPredictImage=name=>{window.open(getPredictImageUrl(name),'_blank')}
+const getPredictImageUrl=img=>{const p=img.path||img.name;return `/api/models/${predictResultModelId.value}/predict-image?dataName=${encodeURIComponent(predictResultDataName.value)}&imageName=${encodeURIComponent(img.name)}&path=${encodeURIComponent(p)}&token=${token.value}`}
+const openPredictImage=img=>{window.open(getPredictImageUrl(img),'_blank')}
 const handleDeleteModel=async m=>{try{await api.value.delete(`/api/models/${m.id}`);showMsg('模型已删除');loadModelList();loadInferenceRecords()}catch(e){showMsg(e.response?.data?.message||'删除失败','error')}}
 const loadInferenceRecords=async()=>{try{const params={};if(inferenceFilter.modelName)params.modelName=inferenceFilter.modelName;if(inferenceFilter.dataName)params.dataName=inferenceFilter.dataName;const r=await api.value.get('/api/models/inferences',{params});inferenceList.value=r.data}catch(e){}}
 const resetInferenceFilter=()=>{inferenceFilter.modelName='';inferenceFilter.dataName='';loadInferenceRecords()}

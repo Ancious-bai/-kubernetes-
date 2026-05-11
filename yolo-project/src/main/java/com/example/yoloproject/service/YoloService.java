@@ -114,6 +114,10 @@ public class YoloService {
         return trainingImage;
     }
 
+    public String getPvcName() {
+        return usePvc ? pvcName : null;
+    }
+
     public void setTrainingImage(String image) {
         if (image != null && !image.trim().isEmpty()) {
             this.trainingImage = image.trim();

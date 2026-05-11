@@ -7,6 +7,7 @@ import com.example.yoloproject.repository.InferenceRecordRepository;
 import com.example.yoloproject.repository.ModelLibraryRepository;
 import com.example.yoloproject.repository.TrainingRecordRepository;
 import com.example.yoloproject.service.AuthService;
+import com.example.yoloproject.service.K8sClientService;
 import com.example.yoloproject.service.YoloService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -25,6 +26,8 @@ import java.util.stream.Collectors;
 @RequestMapping("/api/models")
 public class ModelLibraryController {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ModelLibraryController.class);
+
     @Autowired
     private ModelLibraryRepository modelLibraryRepository;
 
@@ -39,6 +42,9 @@ public class ModelLibraryController {
 
     @Autowired
     private AuthService authService;
+
+    @Autowired
+    private com.example.yoloproject.service.K8sClientService k8sClientService;
 
     @GetMapping
     public ResponseEntity<List<ModelLibrary>> listModels(HttpServletRequest httpRequest) {
@@ -103,23 +109,39 @@ public class ModelLibraryController {
         }
 
         Double map50 = null, map5095 = null, precision = null, recall = null;
-        String resultsFile = projectRoot + "runs/train/" + trainDirName + "/results.txt";
-        if (new File(resultsFile).exists()) {
+        String resultsCsvFile = projectRoot + "runs/train/" + trainDirName + "/results.csv";
+        if (!new File(resultsCsvFile).exists()) {
+            resultsCsvFile = projectRoot + "runs/detect/" + trainDirName + "/results.csv";
+        }
+        if (new File(resultsCsvFile).exists()) {
             try {
-                List<String> lines = Files.readAllLines(Paths.get(resultsFile));
-                for (String line : lines) {
-                    if (line.contains("mAP50")) {
-                        String[] parts = line.split("\\s+");
-                        for (int i = 0; i < parts.length; i++) {
-                            if ("mAP50".equals(parts[i]) && i + 1 < parts.length) {
-                                try { map50 = Double.parseDouble(parts[i + 1]); } catch (Exception ignored) {}
-                            } else if ("mAP50-95".equals(parts[i]) && i + 1 < parts.length) {
-                                try { map5095 = Double.parseDouble(parts[i + 1]); } catch (Exception ignored) {}
-                            }
+                List<String> lines = Files.readAllLines(Paths.get(resultsCsvFile));
+                if (!lines.isEmpty()) {
+                    String headerLine = lines.get(0).trim();
+                    String lastLine = lines.get(lines.size() - 1).trim();
+                    while (lastLine.isEmpty() && lines.size() > 1) {
+                        lines.remove(lines.size() - 1);
+                        lastLine = lines.get(lines.size() - 1).trim();
+                    }
+                    String[] headers = headerLine.split(",");
+                    String[] values = lastLine.split(",");
+                    for (int i = 0; i < headers.length && i < values.length; i++) {
+                        String h = headers[i].trim().replaceAll("^\\s+", "").replaceAll("\\s+$", "");
+                        String v = values[i].trim().replaceAll("^\\s+", "").replaceAll("\\s+$", "");
+                        if (h.contains("mAP50-95") || h.contains("mAP50-95(B)")) {
+                            try { map5095 = Double.parseDouble(v); } catch (Exception ignored) {}
+                        } else if (h.contains("mAP50") || h.contains("mAP50(B)")) {
+                            try { map50 = Double.parseDouble(v); } catch (Exception ignored) {}
+                        } else if (h.contains("precision") || h.contains("precision(B)")) {
+                            try { precision = Double.parseDouble(v); } catch (Exception ignored) {}
+                        } else if (h.contains("recall") || h.contains("recall(B)")) {
+                            try { recall = Double.parseDouble(v); } catch (Exception ignored) {}
                         }
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                log.warn("Failed to parse results.csv for {}: {}", recordName, e.getMessage());
+            }
         }
 
         ModelLibrary model = new ModelLibrary();
@@ -237,17 +259,8 @@ public class ModelLibraryController {
         }
 
         String projectRoot = yoloService.getProjectRoot();
-        String modelPath = model.getModelPath();
-        String imagesDir = projectRoot + targetDataName + "/images";
-        if (!new File(imagesDir).exists()) {
-            imagesDir = projectRoot + targetDataName;
-        }
-        final String effectiveImagesDir = imagesDir;
-
         String predictDirName = model.getModelName() + "_predict_" + targetDataName;
         String predictDir = projectRoot + "runs/detect/" + predictDirName;
-        final String effectivePredictDir = predictDir;
-        final String effectivePredictName = predictDirName;
 
         InferenceRecord record = new InferenceRecord();
         record.setModelId(id);
@@ -255,41 +268,156 @@ public class ModelLibraryController {
         record.setDataName(targetDataName);
         record.setCreatedBy(username);
         record.setPredictDir(predictDir);
+        record.setStatus("running");
         inferenceRecordRepository.save(record);
         final Long recordId = record.getId();
 
         authService.logOperation(null, username, "PREDICT", model.getModelName(),
                 "使用模型 " + model.getModelName() + " 推理数据集 " + targetDataName);
 
-        new Thread(() -> {
-            try {
-                ProcessBuilder pb = new ProcessBuilder(
-                        "python3", "-c",
-                        "from ultralytics import YOLO; model = YOLO('" + modelPath + "'); results = model.predict(source='" + effectiveImagesDir + "', save=True, project='" + projectRoot + "runs/detect', name='" + effectivePredictName + "', exist_ok=True)"
-                );
-                pb.redirectErrorStream(true);
-                Process process = pb.start();
-                process.waitFor(10, java.util.concurrent.TimeUnit.MINUTES);
-                process.destroyForcibly();
+        String jobName = K8sClientService.sanitizeK8sName(predictDirName + "-predict-job");
+        String imageName = yoloService.getTrainingImage();
+        String pvcName = yoloService.getPvcName();
 
-                Map<String, Double> metrics = extractMetrics(effectivePredictDir);
-                InferenceRecord ir = inferenceRecordRepository.findById(recordId).orElse(null);
-                if (ir != null) {
-                    ir.setMap50(metrics.get("map50"));
-                    ir.setMap5095(metrics.get("map50_95"));
-                    ir.setPrecision(metrics.get("precision"));
-                    ir.setRecall(metrics.get("recall"));
-                    ir.setStatus("completed");
-                    inferenceRecordRepository.save(ir);
-                }
-            } catch (Exception e) {
-                InferenceRecord ir = inferenceRecordRepository.findById(recordId).orElse(null);
-                if (ir != null) {
-                    ir.setStatus("failed");
-                    inferenceRecordRepository.save(ir);
-                }
+        try {
+            io.kubernetes.client.openapi.models.V1Job k8sJob = new io.kubernetes.client.openapi.models.V1Job();
+
+            io.kubernetes.client.openapi.models.V1ObjectMeta metadata = new io.kubernetes.client.openapi.models.V1ObjectMeta();
+            metadata.setName(jobName);
+            java.util.Map<String, String> labels = new java.util.HashMap<>();
+            labels.put("app", "yolo-training");
+            labels.put("type", "predict");
+            labels.put("site", targetDataName);
+            metadata.setLabels(labels);
+            k8sJob.setMetadata(metadata);
+
+            io.kubernetes.client.openapi.models.V1JobSpec jobSpec = new io.kubernetes.client.openapi.models.V1JobSpec();
+            jobSpec.setParallelism(1);
+            jobSpec.setCompletions(1);
+            jobSpec.setBackoffLimit(2);
+            jobSpec.setTtlSecondsAfterFinished(3600);
+
+            io.kubernetes.client.openapi.models.V1PodTemplateSpec template = new io.kubernetes.client.openapi.models.V1PodTemplateSpec();
+            io.kubernetes.client.openapi.models.V1ObjectMeta templateMeta = new io.kubernetes.client.openapi.models.V1ObjectMeta();
+            templateMeta.setLabels(labels);
+            template.setMetadata(templateMeta);
+
+            io.kubernetes.client.openapi.models.V1PodSpec podSpec = new io.kubernetes.client.openapi.models.V1PodSpec();
+            podSpec.setRestartPolicy("Never");
+
+            io.kubernetes.client.openapi.models.V1Container container = new io.kubernetes.client.openapi.models.V1Container();
+            container.setName("yolo-container");
+            container.setImage(imageName);
+            container.setImagePullPolicy("IfNotPresent");
+            container.setWorkingDir("/app/workspace");
+
+            String modelPath = model.getModelPath().replace(projectRoot, "/app/data/");
+            String sourcePath = "/app/data/" + targetDataName + "/images";
+            String projectDir = "/app/data/runs/detect";
+
+            java.util.List<String> command = java.util.Arrays.asList(
+                    "python3", "-c",
+                    "from ultralytics import YOLO; import os; " +
+                    "src='" + sourcePath + "'; " +
+                    "if not os.path.exists(src): src='" + "/app/data/" + targetDataName + "'; " +
+                    "model=YOLO('" + modelPath + "'); " +
+                    "model.predict(source=src, save=True, project='" + projectDir + "', name='" + predictDirName + "', exist_ok=True)"
+            );
+            container.setCommand(command);
+
+            io.kubernetes.client.openapi.models.V1EnvVar env1 = new io.kubernetes.client.openapi.models.V1EnvVar();
+            env1.setName("PYTHONUNBUFFERED");
+            env1.setValue("1");
+            io.kubernetes.client.openapi.models.V1EnvVar env2 = new io.kubernetes.client.openapi.models.V1EnvVar();
+            env2.setName("DATA_ROOT");
+            env2.setValue("/app/data");
+            container.setEnv(java.util.Arrays.asList(env1, env2));
+
+            if (pvcName != null && !pvcName.isEmpty()) {
+                io.kubernetes.client.openapi.models.V1VolumeMount volumeMount = new io.kubernetes.client.openapi.models.V1VolumeMount();
+                volumeMount.setName("app-volume");
+                volumeMount.setMountPath("/app/data");
+                container.setVolumeMounts(java.util.Collections.singletonList(volumeMount));
             }
-        }).start();
+
+            io.kubernetes.client.openapi.models.V1ResourceRequirements resources = new io.kubernetes.client.openapi.models.V1ResourceRequirements();
+            java.util.Map<String, io.kubernetes.client.custom.Quantity> resRequests = new java.util.HashMap<>();
+            java.util.Map<String, io.kubernetes.client.custom.Quantity> resLimits = new java.util.HashMap<>();
+            resRequests.put("cpu", new io.kubernetes.client.custom.Quantity("500m"));
+            resRequests.put("memory", new io.kubernetes.client.custom.Quantity("1Gi"));
+            resLimits.put("cpu", new io.kubernetes.client.custom.Quantity("2"));
+            resLimits.put("memory", new io.kubernetes.client.custom.Quantity("4Gi"));
+            resources.setRequests(resRequests);
+            resources.setLimits(resLimits);
+            container.setResources(resources);
+
+            podSpec.setContainers(java.util.Collections.singletonList(container));
+
+            if (pvcName != null && !pvcName.isEmpty()) {
+                io.kubernetes.client.openapi.models.V1Volume volume = new io.kubernetes.client.openapi.models.V1Volume();
+                volume.setName("app-volume");
+                io.kubernetes.client.openapi.models.V1PersistentVolumeClaimVolumeSource pvcSource = new io.kubernetes.client.openapi.models.V1PersistentVolumeClaimVolumeSource();
+                pvcSource.setClaimName(pvcName);
+                volume.setPersistentVolumeClaim(pvcSource);
+                podSpec.setVolumes(java.util.Collections.singletonList(volume));
+            }
+
+            template.setSpec(podSpec);
+            jobSpec.setTemplate(template);
+            k8sJob.setSpec(jobSpec);
+
+            k8sClientService.createJob(k8sJob);
+
+            new Thread(() -> {
+                try {
+                    for (int i = 0; i < 120; i++) {
+                        Thread.sleep(5000);
+                        String status = k8sClientService.getJobStatus(jobName);
+                        if ("Succeeded".equals(status) || "COMPLETED".equals(status) || "DONE".equals(status)) {
+                            Map<String, Double> metrics = extractMetrics(predictDir);
+                            InferenceRecord ir = inferenceRecordRepository.findById(recordId).orElse(null);
+                            if (ir != null) {
+                                ir.setMap50(metrics.get("map50"));
+                                ir.setMap5095(metrics.get("map50_95"));
+                                ir.setPrecision(metrics.get("precision"));
+                                ir.setRecall(metrics.get("recall"));
+                                ir.setStatus("completed");
+                                inferenceRecordRepository.save(ir);
+                            }
+                            return;
+                        } else if ("Failed".equals(status) || "FAILED".equals(status)) {
+                            InferenceRecord ir = inferenceRecordRepository.findById(recordId).orElse(null);
+                            if (ir != null) {
+                                ir.setStatus("failed");
+                                inferenceRecordRepository.save(ir);
+                            }
+                            return;
+                        }
+                    }
+                    InferenceRecord ir = inferenceRecordRepository.findById(recordId).orElse(null);
+                    if (ir != null) {
+                        ir.setStatus("failed");
+                        inferenceRecordRepository.save(ir);
+                    }
+                } catch (Exception e) {
+                    InferenceRecord ir = inferenceRecordRepository.findById(recordId).orElse(null);
+                    if (ir != null) {
+                        ir.setStatus("failed");
+                        inferenceRecordRepository.save(ir);
+                    }
+                }
+            }).start();
+
+        } catch (Exception e) {
+            InferenceRecord ir = inferenceRecordRepository.findById(recordId).orElse(null);
+            if (ir != null) {
+                ir.setStatus("failed");
+                inferenceRecordRepository.save(ir);
+            }
+            response.put("message", "推理任务创建失败: " + e.getMessage());
+            response.put("status", "error");
+            return ResponseEntity.status(500).body(response);
+        }
 
         response.put("message", "推理任务已提交");
         response.put("status", "success");
@@ -300,21 +428,30 @@ public class ModelLibraryController {
 
     private Map<String, Double> extractMetrics(String predictDir) {
         Map<String, Double> metrics = new HashMap<>();
-        File resultsFile = new File(predictDir, "results.txt");
-        if (resultsFile.exists()) {
+        File resultsCsv = new File(predictDir, "results.csv");
+        if (resultsCsv.exists()) {
             try {
-                List<String> lines = Files.readAllLines(resultsFile.toPath());
-                for (String line : lines) {
-                    String[] parts = line.split("\\s+");
-                    for (int i = 0; i < parts.length; i++) {
-                        if ("mAP50".equals(parts[i]) && i + 1 < parts.length) {
-                            try { metrics.put("map50", Double.parseDouble(parts[i + 1])); } catch (Exception ignored) {}
-                        } else if ("mAP50-95".equals(parts[i]) && i + 1 < parts.length) {
-                            try { metrics.put("map50_95", Double.parseDouble(parts[i + 1])); } catch (Exception ignored) {}
-                        } else if ("precision".equals(parts[i]) && i + 1 < parts.length) {
-                            try { metrics.put("precision", Double.parseDouble(parts[i + 1])); } catch (Exception ignored) {}
-                        } else if ("recall".equals(parts[i]) && i + 1 < parts.length) {
-                            try { metrics.put("recall", Double.parseDouble(parts[i + 1])); } catch (Exception ignored) {}
+                List<String> lines = Files.readAllLines(resultsCsv.toPath());
+                if (!lines.isEmpty()) {
+                    String headerLine = lines.get(0).trim();
+                    String lastLine = lines.get(lines.size() - 1).trim();
+                    while (lastLine.isEmpty() && lines.size() > 1) {
+                        lines.remove(lines.size() - 1);
+                        lastLine = lines.get(lines.size() - 1).trim();
+                    }
+                    String[] headers = headerLine.split(",");
+                    String[] values = lastLine.split(",");
+                    for (int i = 0; i < headers.length && i < values.length; i++) {
+                        String h = headers[i].trim();
+                        String v = values[i].trim();
+                        if (h.contains("mAP50-95") || h.contains("mAP50-95(B)")) {
+                            try { metrics.put("map50_95", Double.parseDouble(v)); } catch (Exception ignored) {}
+                        } else if (h.contains("mAP50") || h.contains("mAP50(B)")) {
+                            try { metrics.put("map50", Double.parseDouble(v)); } catch (Exception ignored) {}
+                        } else if (h.contains("precision") || h.contains("precision(B)")) {
+                            try { metrics.put("precision", Double.parseDouble(v)); } catch (Exception ignored) {}
+                        } else if (h.contains("recall") || h.contains("recall(B)")) {
+                            try { metrics.put("recall", Double.parseDouble(v)); } catch (Exception ignored) {}
                         }
                     }
                 }
@@ -349,19 +486,30 @@ public class ModelLibraryController {
 
         response.put("exists", true);
         List<Map<String, Object>> images = new ArrayList<>();
-        File[] files = dir.listFiles((d, name) ->
-                name.toLowerCase().endsWith(".jpg") || name.toLowerCase().endsWith(".png") || name.toLowerCase().endsWith(".jpeg"));
-        if (files != null) {
-            for (File f : files) {
-                Map<String, Object> info = new HashMap<>();
-                info.put("name", f.getName());
-                info.put("size", f.length());
-                images.add(info);
-            }
-        }
+        collectImageFiles(dir, "", images);
         response.put("images", images);
         response.put("count", images.size());
         return ResponseEntity.ok(response);
+    }
+
+    private void collectImageFiles(File dir, String prefix, List<Map<String, Object>> images) {
+        File[] files = dir.listFiles();
+        if (files == null) return;
+        for (File f : files) {
+            String path = prefix.isEmpty() ? f.getName() : prefix + "/" + f.getName();
+            if (f.isDirectory()) {
+                collectImageFiles(f, path, images);
+            } else {
+                String name = f.getName().toLowerCase();
+                if (name.endsWith(".jpg") || name.endsWith(".png") || name.endsWith(".jpeg")) {
+                    Map<String, Object> info = new HashMap<>();
+                    info.put("name", f.getName());
+                    info.put("path", path);
+                    info.put("size", f.length());
+                    images.add(info);
+                }
+            }
+        }
     }
 
     @GetMapping("/{id}/predict-image")
@@ -369,6 +517,7 @@ public class ModelLibraryController {
             @PathVariable Long id,
             @RequestParam String dataName,
             @RequestParam String imageName,
+            @RequestParam(required = false) String path,
             HttpServletRequest httpRequest,
             HttpServletResponse httpResponse) {
         ModelLibrary model = modelLibraryRepository.findById(id).orElse(null);
@@ -379,12 +528,13 @@ public class ModelLibraryController {
 
         String projectRoot = yoloService.getProjectRoot();
         String predictDirName = model.getModelName() + "_predict_" + dataName;
-        String imagePath = projectRoot + "runs/detect/" + predictDirName + "/" + imageName;
+        String baseDir = projectRoot + "runs/detect/" + predictDirName;
+        String imagePath = (path != null && !path.isEmpty()) ? baseDir + "/" + path : baseDir + "/" + imageName;
 
         try {
             File file = new File(imagePath).getCanonicalFile();
-            File baseDir = new File(projectRoot + "runs/detect/" + predictDirName).getCanonicalFile();
-            if (!file.getPath().startsWith(baseDir.getPath()) || !file.exists()) {
+            File baseDirFile = new File(baseDir).getCanonicalFile();
+            if (!file.getPath().startsWith(baseDirFile.getPath()) || !file.exists()) {
                 httpResponse.setStatus(404);
                 return;
             }
