@@ -404,6 +404,13 @@ public class K8sClientService {
 
     public V1Job buildPreprocessJob(String jobName, String dataName, String inputDir,
                                      String imageName, String pvcName, String mountPath) {
+        return buildPreprocessJob(jobName, dataName, inputDir, imageName, pvcName, mountPath, null, null, null, null);
+    }
+
+    public V1Job buildPreprocessJob(String jobName, String dataName, String inputDir,
+                                     String imageName, String pvcName, String mountPath,
+                                     String cpuRequest, String cpuLimit,
+                                     String memRequest, String memLimit) {
         V1Job job = new V1Job();
 
         V1ObjectMeta metadata = new V1ObjectMeta();

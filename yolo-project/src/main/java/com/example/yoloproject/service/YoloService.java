@@ -157,7 +157,8 @@ public class YoloService {
 
                 V1Job job = k8sClientService.buildPreprocessJob(
                         dataName + "-preprocess-job", dataName, inputDir,
-                        trainingImage, pvcName, mountPath
+                        trainingImage, pvcName, mountPath,
+                        "250m", "1", "512Mi", "2Gi"
                 );
                 k8sClientService.createJob(job);
                 log.info("Preprocess job created: {}", preprocessJobName);
