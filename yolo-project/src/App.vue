@@ -52,6 +52,10 @@
               <div class="cfg-item"><span class="cfg-label">Epochs</span><el-input-number v-model="defaultEpochs" :min="1" :max="1000" size="small" style="width:100px" /><el-button type="primary" size="small" @click="handleDefaultEpochsChange(defaultEpochs)">保存</el-button></div>
               <div class="cfg-item"><span class="cfg-label">Imgsz</span><el-input-number v-model="defaultImgsz" :min="32" :max="1280" :step="32" size="small" style="width:120px" /><el-button type="primary" size="small" @click="handleDefaultImgszChange(defaultImgsz)">保存</el-button></div>
             </div>
+            <div class="config-row" style="margin-top:8px">
+              <div class="cfg-item"><span class="cfg-label">调度模式</span><el-select v-model="schedulingMode" size="small" style="width:100px" @change="handleSchedulingModeChange"><el-option label="自动" value="auto" /><el-option label="手动" value="manual" /></el-select></div>
+              <div class="cfg-item"><span class="cfg-label">训练镜像</span><el-input v-model="trainingImage" size="small" style="width:200px" placeholder="镜像名称" /><el-button type="primary" size="small" @click="handleTrainingImageChange">保存</el-button></div>
+            </div>
           </el-card>
         </div>
 
@@ -291,6 +295,34 @@
 
       </div>
 
+    <el-dialog title="训练资源预估" v-model="estimateDialogVisible" width="520px" :close-on-click-modal="false">
+      <div v-if="estimateLoading" style="text-align:center;padding:20px"><el-icon class="is-loading" size="24"><Loading /></el-icon><p>正在预估资源...</p></div>
+      <div v-else-if="estimateResult.error" style="color:#f56c6c">{{ estimateResult.error }}</div>
+      <div v-else>
+        <div style="margin-bottom:12px">
+          <h4 style="margin:0 0 8px;font-size:14px">预计消耗资源</h4>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div style="background:#f5f7fa;padding:8px 12px;border-radius:6px"><span style="color:#909399;font-size:12px">CPU请求/上限</span><div style="font-weight:600">{{ estimateResult.cpuRequest }} / {{ estimateResult.cpuLimit }}</div></div>
+            <div style="background:#f5f7fa;padding:8px 12px;border-radius:6px"><span style="color:#909399;font-size:12px">内存请求/上限</span><div style="font-weight:600">{{ estimateResult.memRequest }} / {{ estimateResult.memLimit }}</div></div>
+          </div>
+        </div>
+        <div v-if="estimateResult.nodeName || estimateResult.autoSelectedNode" style="margin-bottom:12px">
+          <h4 style="margin:0 0 8px;font-size:14px">{{ estimateResult.autoSelectedNode ? '自动分配节点' : '指定节点' }}：<el-tag type="primary" size="small">{{ estimateResult.nodeName || estimateResult.autoSelectedNode }}</el-tag></h4>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div style="background:#f5f7fa;padding:8px 12px;border-radius:6px"><span style="color:#909399;font-size:12px">节点CPU 总/已用/剩余</span><div>{{ estimateResult.nodeCpuTotal }} / {{ estimateResult.nodeCpuUsed }} / <span :style="{color:parseFloat(estimateResult.nodeCpuRemaining)<1?'#f56c6c':'#67c23a',fontWeight:600}">{{ estimateResult.nodeCpuRemaining }}</span></div></div>
+            <div style="background:#f5f7fa;padding:8px 12px;border-radius:6px"><span style="color:#909399;font-size:12px">节点内存(MB) 总/已用/剩余</span><div>{{ estimateResult.nodeMemTotalMB }} / {{ estimateResult.nodeMemUsedMB }} / <span :style="{color:parseFloat(estimateResult.nodeMemRemainingMB)<1024?'#f56c6c':'#67c23a',fontWeight:600}">{{ estimateResult.nodeMemRemainingMB }}</span></div></div>
+          </div>
+          <div v-if="estimateResult.cpuAfterTask!=null" style="margin-top:8px;background:#f5f7fa;padding:8px 12px;border-radius:6px"><span style="color:#909399;font-size:12px">任务后预计剩余</span><div>CPU: {{ estimateResult.cpuAfterTask }} 核 / 内存: {{ estimateResult.memAfterTaskMB }} MB</div></div>
+        </div>
+        <div v-if="estimateResult.noAvailableNode" style="color:#f56c6c;text-align:center;padding:10px">当前没有可用节点，任务将进入排队等待</div>
+        <el-alert v-if="estimateResult.resourceSufficient===false" title="资源可能不足" type="warning" :closable="false" style="margin-top:8px">当前节点剩余资源可能不足以运行此任务，训练可能会变慢或失败。</el-alert>
+      </div>
+      <template #footer>
+        <el-button @click="estimateDialogVisible=false">取消</el-button>
+        <el-button type="primary" @click="confirmEstimateAndTrain">{{ estimateResult.resourceSufficient===false?'仍然继续':'确认训练' }}</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog title="保存模型到模型库" v-model="saveModelDialogVisible" width="480px" :close-on-click-modal="false">
       <el-form :model="saveModelForm" label-width="80px">
         <el-form-item label="记录"><el-tag type="success">{{ saveModelForm.recordName }}</el-tag></el-form-item>
@@ -393,7 +425,7 @@ const loginForm=reactive({username:'',password:''})
 const loginLoading=ref(false),loginError=ref('')
 const currentUser=reactive({username:'',role:''})
 const token=ref('')
-const defaultEpochs=ref(2),savedDefaultEpochs=ref(2),defaultImgsz=ref(640),savedDefaultImgsz=ref(640)
+const defaultEpochs=ref(2),savedDefaultEpochs=ref(2),defaultImgsz=ref(640),savedDefaultImgsz=ref(640),trainingImage=ref('')
 const currentStep=ref(''),datasetList=ref([]),deleteConfirmVisible=ref(false),cleanupConfirmVisible=ref(false),cleanupLoading=ref(false),datasetToDelete=ref('')
 const deleteRecordConfirmVisible=ref(false),recordToDelete=ref('')
 const processingStatus=ref({}),testLoadingStatus=ref({}),trainingRecords=ref([]),userList=ref([]),operationLogs=ref([]),showAddUserDialog=ref(false)
@@ -459,6 +491,7 @@ const syncNodes=async()=>{nodesSyncing.value=true;try{await api.value.post('/api
 const cordonNode=async(name)=>{try{await api.value.post(`/api/nodes/${name}/cordon`);showMsg(`节点 ${name} 已停止调度`);await loadClusterNodes()}catch(e){showMsg('操作失败','error')}}
 const uncordonNode=async(name)=>{try{await api.value.post(`/api/nodes/${name}/uncordon`);showMsg(`节点 ${name} 已恢复调度`);await loadClusterNodes()}catch(e){showMsg('操作失败','error')}}
 const handleSchedulingModeChange=async(v)=>{try{await api.value.post('/api/scheduler/scheduling-mode',{mode:v});showMsg(`调度模式已设为 ${v==='auto'?'自动':'手动'}`)}catch(e){showMsg('更新失败','error')}}
+const handleTrainingImageChange=async()=>{try{await api.value.post('/api/scheduler/training-image',{image:trainingImage.value});showMsg('训练镜像已更新')}catch(e){showMsg('更新失败','error')}}
 
 const showDistributedTrain=(dataName)=>{distributedTrainForm.dataName=dataName;distributedTrainForm.epochs=savedDefaultEpochs.value;distributedTrainForm.imgsz=savedDefaultImgsz.value;distributedTrainForm.targetNode='';distributedTrainForm.gpuType='';distributedTrainForm.gpuCount=1;showDistributedTrainDialog.value=true}
 const confirmDistributedTrain=async()=>{const req={dataName:distributedTrainForm.dataName,epochs:distributedTrainForm.epochs,imgsz:distributedTrainForm.imgsz};if(distributedTrainForm.targetNode)req.targetNode=distributedTrainForm.targetNode;if(distributedTrainForm.gpuType&&distributedTrainForm.gpuCount>0){req.gpuResources={};req.gpuResources[distributedTrainForm.gpuType]=String(distributedTrainForm.gpuCount)}try{const r=await api.value.post('/api/scheduler/add',req);showMsg(r.data.message);showDistributedTrainDialog.value=false;await loadTrainingRecords();const rn=`${distributedTrainForm.dataName}-e${distributedTrainForm.epochs}-i${distributedTrainForm.imgsz}`;trainLogs.value[rn]='';connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){showMsg(e.response?.data?.message||'提交失败','error')}}
@@ -467,7 +500,7 @@ const handleLogin=async()=>{if(loginLoading.value)return;loginLoading.value=true
 
 const handleLogout=()=>{token.value='';currentUser.username='';currentUser.role='';isLoggedIn.value=false;localStorage.removeItem('token');localStorage.removeItem('username');localStorage.removeItem('role');stopAllWs();stopStatusRefresh();stopAllPreprocessTimers();datasetList.value=[];trainingRecords.value=[];userList.value=[];operationLogs.value=[];Object.keys(pendingRecords.value).forEach(k=>delete pendingRecords.value[k]);Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k]);Object.keys(processingStatus.value).forEach(k=>delete processingStatus.value[k]);Object.keys(testLoadingStatus.value).forEach(k=>delete testLoadingStatus.value[k]);currentPage.value=1;total.value=0;activePage.value='main'}
 
-const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs(),loadClusterNodes(),loadModelList()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz;if(r.data.schedulingMode)schedulingMode.value=r.data.schedulingMode}startStatusRefresh()}catch(e){}}
+const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs(),loadClusterNodes(),loadModelList()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz;if(r.data.schedulingMode)schedulingMode.value=r.data.schedulingMode;if(r.data.trainingImage)trainingImage.value=r.data.trainingImage}startStatusRefresh()}catch(e){}}
 
 const loadTrainingRecords=async()=>{try{const oldRecords=[...trainingRecords.value];trainingRecords.value=(await api.value.get('/api/training-records')).data;checkStatusChanges(oldRecords,trainingRecords.value)}catch(e){}}
 const loadUsers=async()=>{try{const params={};if(userSearch.value)params.search=userSearch.value;if(userRoleFilter.value)params.role=userRoleFilter.value;userList.value=(await api.value.get('/api/users',{params})).data}catch(e){}}
@@ -488,9 +521,18 @@ const pollPreprocess=(jobId,dataName)=>{const tid=`pre-${dataName}-${Date.now()}
 
 const stopAllPreprocessTimers=()=>{Object.values(preprocessTimers.value).forEach(id=>clearInterval(id));preprocessTimers.value={}}
 
-const handleTrainRecord=async(rec)=>{const rn=rec.recordName;trainLogs.value[rn]='';try{const r=await api.value.post('/api/scheduler/add',{dataName:rec.dataName,epochs:rec.epochs,imgsz:rec.imgsz});showMsg(r.data.message);await loadTrainingRecords();connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){delete trainLogs.value[rn];showMsg(e.response?.data?.message||'加入队列失败','error')}}
+const estimateResult=ref({})
+const estimateDialogVisible=ref(false)
+const estimateLoading=ref(false)
+const estimateCallback=ref(null)
 
-const handleTrainPending=async(dataName,pending)=>{const rn=`${dataName}-e${pending.epochs}-i${pending.imgsz}`;trainLogs.value[rn]='';try{const req={dataName,epochs:pending.epochs,imgsz:pending.imgsz};if(pending.scheduleMode==='manual'&&pending.targetNode)req.targetNode=pending.targetNode;const r=await api.value.post('/api/scheduler/add',req);showMsg(r.data.message);removePendingRecord(dataName,pending.key);await loadTrainingRecords();connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){delete trainLogs.value[rn];showMsg(e.response?.data?.message||'加入队列失败','error')}}
+const showEstimateDialog=async(dataName,epochs,imgsz,targetNode,callback)=>{estimateLoading.value=true;estimateDialogVisible.value=true;estimateCallback.value=callback;try{const req={dataName,epochs,imgsz};if(targetNode)req.targetNode=targetNode;const r=await api.value.post('/api/scheduler/estimate',req);estimateResult.value=r.data}catch(e){estimateResult.value={error:e.response?.data?.message||'预估失败'}}finally{estimateLoading.value=false}}
+
+const confirmEstimateAndTrain=()=>{estimateDialogVisible.value=false;if(estimateCallback.value)estimateCallback.value()}
+
+const handleTrainRecord=async(rec=>{const rn=rec.recordName;showEstimateDialog(rec.dataName,rec.epochs,rec.imgsz,null,async()=>{trainLogs.value[rn]='';try{const r=await api.value.post('/api/scheduler/add',{dataName:rec.dataName,epochs:rec.epochs,imgsz:rec.imgsz});showMsg(r.data.message);await loadTrainingRecords();connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){delete trainLogs.value[rn];showMsg(e.response?.data?.message||'加入队列失败','error')}})})
+
+const handleTrainPending=async(dataName,pending)=>{const rn=`${dataName}-e${pending.epochs}-i${pending.imgsz}`;const targetNode=pending.scheduleMode==='manual'?pending.targetNode:null;showEstimateDialog(dataName,pending.epochs,pending.imgsz,targetNode,async()=>{trainLogs.value[rn]='';try{const req={dataName,epochs:pending.epochs,imgsz:pending.imgsz};if(pending.scheduleMode==='manual'&&pending.targetNode)req.targetNode=pending.targetNode;const r=await api.value.post('/api/scheduler/add',req);showMsg(r.data.message);removePendingRecord(dataName,pending.key);await loadTrainingRecords();connectLogWebSocket(rn,'train');startStatusRefresh()}catch(e){delete trainLogs.value[rn];showMsg(e.response?.data?.message||'加入队列失败','error')}})}
 
 const handleTestRecord=async(rec)=>{testLogs.value[rec.recordName]='';testLoadingStatus.value[rec.recordName]=true;try{const r=await api.value.post('/api/test',{dataName:rec.dataName,imgsz:rec.imgsz,recordName:rec.recordName});showMsg('测试任务已启动');await loadTrainingRecords();connectLogWebSocket(rec.recordName,'test');startStatusRefresh()}catch(e){testLogs.value[rec.recordName]=`错误: ${e.message}\n`;testLoadingStatus.value[rec.recordName]=false}}
 

@@ -8,6 +8,7 @@ import com.example.yoloproject.repository.DatasetRepository;
 import com.example.yoloproject.repository.TrainingRecordRepository;
 import com.example.yoloproject.repository.NodeLogRepository;
 import com.example.yoloproject.repository.ModelLibraryRepository;
+import com.example.yoloproject.repository.SystemConfigRepository;
 import io.kubernetes.client.openapi.models.V1Job;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,6 +73,9 @@ public class YoloService {
     @Autowired
     private ModelLibraryRepository modelLibraryRepository;
 
+    @Autowired
+    private SystemConfigRepository systemConfigRepository;
+
     private String PROJECT_ROOT;
     public String LOGS_DIR;
 
@@ -87,12 +91,43 @@ public class YoloService {
             PROJECT_ROOT += "/";
         }
         LOGS_DIR = PROJECT_ROOT + "logs";
+
+        try {
+            SystemConfig imgConfig = systemConfigRepository.findByConfigKey("training.image").orElse(null);
+            if (imgConfig != null && imgConfig.getConfigValue() != null) {
+                trainingImage = imgConfig.getConfigValue();
+            }
+        } catch (Exception e) {
+            log.warn("Failed to load training image config from DB: {}", e.getMessage());
+        }
+
         log.info("YoloService initialized, PROJECT_ROOT={}, trainingImage={}, pvcName={}, usePvc={}",
                 PROJECT_ROOT, trainingImage, pvcName, usePvc);
     }
 
     public String getProjectRoot() {
         return PROJECT_ROOT;
+    }
+
+    public String getTrainingImage() {
+        return trainingImage;
+    }
+
+    public void setTrainingImage(String image) {
+        if (image != null && !image.trim().isEmpty()) {
+            this.trainingImage = image.trim();
+            try {
+                SystemConfig config = systemConfigRepository.findByConfigKey("training.image").orElse(null);
+                if (config == null) {
+                    config = new SystemConfig("training.image", image.trim(), "训练镜像");
+                } else {
+                    config.setConfigValue(image.trim());
+                }
+                systemConfigRepository.save(config);
+            } catch (Exception e) {
+                log.warn("Failed to persist training image config: {}", e.getMessage());
+            }
+        }
     }
 
     public String startPreprocess(String inputDir) {
@@ -1124,7 +1159,7 @@ public class YoloService {
         }
     }
 
-    private Map<String, String> calculateDynamicResources(String dataName, int epochs, int imgsz) {
+    public Map<String, String> calculateDynamicResources(String dataName, int epochs, int imgsz) {
         Map<String, String> resources = new HashMap<>();
 
         long datasetSizeBytes = 0;

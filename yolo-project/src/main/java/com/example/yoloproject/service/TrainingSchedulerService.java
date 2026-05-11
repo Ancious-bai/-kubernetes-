@@ -552,7 +552,16 @@ public class TrainingSchedulerService {
         config.put("defaultEpochs", defaultEpochs);
         config.put("defaultImgsz", defaultImgsz);
         config.put("schedulingMode", schedulingMode);
+        config.put("trainingImage", yoloService.getTrainingImage());
         return config;
+    }
+
+    public String getTrainingImage() {
+        return yoloService.getTrainingImage();
+    }
+
+    public void setTrainingImage(String image) {
+        yoloService.setTrainingImage(image);
     }
 
     private static class TrainingTask {

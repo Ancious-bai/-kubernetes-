@@ -7,6 +7,7 @@ import com.example.yoloproject.repository.NodeLogRepository;
 import io.kubernetes.client.openapi.models.V1Node;
 import io.kubernetes.client.openapi.models.V1NodeAddress;
 import io.kubernetes.client.openapi.models.V1NodeCondition;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +31,19 @@ public class NodeManagementService {
 
     @Autowired
     private NodeLogRepository nodeLogRepository;
+
+    @PostConstruct
+    public void init() {
+        new Thread(() -> {
+            try {
+                Thread.sleep(5000);
+                log.info("Performing initial node sync on startup...");
+                syncNodesFromCluster();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }).start();
+    }
 
     public List<NodeInfo> getAllNodes() {
         List<NodeInfo> nodes = nodeInfoRepository.findAll();

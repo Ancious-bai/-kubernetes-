@@ -1,7 +1,10 @@
 package com.example.yoloproject.controller;
 
 import com.example.yoloproject.service.AuthService;
+import com.example.yoloproject.service.NodeManagementService;
 import com.example.yoloproject.service.TrainingSchedulerService;
+import com.example.yoloproject.service.YoloService;
+import com.example.yoloproject.entity.NodeInfo;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -20,6 +23,123 @@ public class SchedulerController {
 
     @Autowired
     private AuthService authService;
+
+    @Autowired
+    private NodeManagementService nodeManagementService;
+
+    @Autowired
+    private YoloService yoloService;
+
+    @PostMapping("/estimate")
+    public ResponseEntity<Map<String, Object>> estimateResources(@RequestBody Map<String, Object> request) {
+        String dataName = (String) request.get("dataName");
+        Integer epochs = request.get("epochs") != null ? ((Number) request.get("epochs")).intValue() : null;
+        Integer imgsz = request.get("imgsz") != null ? ((Number) request.get("imgsz")).intValue() : null;
+        String targetNode = (String) request.get("targetNode");
+
+        int e = epochs != null && epochs > 0 ? epochs : 2;
+        int i = imgsz != null && imgsz > 0 ? imgsz : 640;
+
+        Map<String, String> resources = yoloService.calculateDynamicResources(dataName, e, i);
+        Map<String, Object> response = new HashMap<>();
+
+        response.put("cpuRequest", resources.get("cpuRequest"));
+        response.put("cpuLimit", resources.get("cpuLimit"));
+        response.put("memRequest", resources.get("memRequest"));
+        response.put("memLimit", resources.get("memLimit"));
+        response.put("epochs", e);
+        response.put("imgsz", i);
+
+        if (targetNode != null && !targetNode.isEmpty()) {
+            NodeInfo node = nodeManagementService.getNodeByName(targetNode).orElse(null);
+            if (node != null) {
+                double cpuCores = parseCpuToDouble(node.getCpuAllocatable());
+                double memMB = parseMemToDouble(node.getMemoryAllocatable());
+                double cpuReq = parseCpuToDouble(resources.get("cpuRequest"));
+                double memReqMB = parseMemToDouble(resources.get("memRequest"));
+
+                try {
+                    Map<String, Object> allocated = nodeManagementService.getNodeDetailedResources(targetNode);
+                    double cpuUsed = ((Number) allocated.getOrDefault("cpuRequested", 0)).doubleValue();
+                    double memUsedMB = ((Number) allocated.getOrDefault("memoryRequestedMB", 0)).doubleValue();
+                    double cpuRemaining = cpuCores - cpuUsed;
+                    double memRemainingMB = memMB - memUsedMB;
+
+                    response.put("nodeName", targetNode);
+                    response.put("nodeCpuTotal", String.format("%.1f", cpuCores));
+                    response.put("nodeMemTotalMB", String.format("%.0f", memMB));
+                    response.put("nodeCpuUsed", String.format("%.1f", cpuUsed));
+                    response.put("nodeMemUsedMB", String.format("%.0f", memUsedMB));
+                    response.put("nodeCpuRemaining", String.format("%.1f", cpuRemaining));
+                    response.put("nodeMemRemainingMB", String.format("%.0f", memRemainingMB));
+                    response.put("cpuSufficient", cpuRemaining >= cpuReq);
+                    response.put("memSufficient", memRemainingMB >= memReqMB);
+                    response.put("resourceSufficient", cpuRemaining >= cpuReq && memRemainingMB >= memReqMB);
+                } catch (Exception ex) {
+                    response.put("nodeName", targetNode);
+                    response.put("resourceCheckError", ex.getMessage());
+                }
+            }
+        } else {
+            NodeInfo bestNode = nodeManagementService.selectBestNodeForTraining(null);
+            if (bestNode != null) {
+                double cpuCores = parseCpuToDouble(bestNode.getCpuAllocatable());
+                double memMB = parseMemToDouble(bestNode.getMemoryAllocatable());
+                double cpuReq = parseCpuToDouble(resources.get("cpuRequest"));
+                double memReqMB = parseMemToDouble(resources.get("memRequest"));
+
+                try {
+                    Map<String, Object> allocated = nodeManagementService.getNodeDetailedResources(bestNode.getNodeName());
+                    double cpuUsed = ((Number) allocated.getOrDefault("cpuRequested", 0)).doubleValue();
+                    double memUsedMB = ((Number) allocated.getOrDefault("memoryRequestedMB", 0)).doubleValue();
+                    double cpuRemaining = cpuCores - cpuUsed;
+                    double memRemainingMB = memMB - memUsedMB;
+
+                    response.put("autoSelectedNode", bestNode.getNodeName());
+                    response.put("nodeCpuTotal", String.format("%.1f", cpuCores));
+                    response.put("nodeMemTotalMB", String.format("%.0f", memMB));
+                    response.put("nodeCpuUsed", String.format("%.1f", cpuUsed));
+                    response.put("nodeMemUsedMB", String.format("%.0f", memUsedMB));
+                    response.put("nodeCpuRemaining", String.format("%.1f", cpuRemaining));
+                    response.put("nodeMemRemainingMB", String.format("%.0f", memRemainingMB));
+                    response.put("cpuAfterTask", String.format("%.1f", cpuRemaining - cpuReq));
+                    response.put("memAfterTaskMB", String.format("%.0f", memRemainingMB - memReqMB));
+                    response.put("resourceSufficient", cpuRemaining >= cpuReq && memRemainingMB >= memReqMB);
+                } catch (Exception ex) {
+                    response.put("autoSelectedNode", bestNode.getNodeName());
+                    response.put("resourceCheckError", ex.getMessage());
+                }
+            } else {
+                response.put("noAvailableNode", true);
+            }
+        }
+
+        return ResponseEntity.ok(response);
+    }
+
+    private double parseCpuToDouble(String cpuStr) {
+        if (cpuStr == null || cpuStr.isEmpty()) return 2.0;
+        try {
+            String s = cpuStr.trim();
+            if (s.endsWith("m")) return Double.parseDouble(s.substring(0, s.length() - 1)) / 1000.0;
+            return Double.parseDouble(s);
+        } catch (NumberFormatException e) {
+            return 2.0;
+        }
+    }
+
+    private double parseMemToDouble(String memStr) {
+        if (memStr == null || memStr.isEmpty()) return 4096.0;
+        try {
+            String s = memStr.trim();
+            if (s.endsWith("Ki")) return Double.parseDouble(s.substring(0, s.length() - 2)) / 1024.0;
+            if (s.endsWith("Mi")) return Double.parseDouble(s.substring(0, s.length() - 2));
+            if (s.endsWith("Gi")) return Double.parseDouble(s.substring(0, s.length() - 2)) * 1024;
+            return Double.parseDouble(s) / (1024.0 * 1024.0);
+        } catch (NumberFormatException e) {
+            return 4096.0;
+        }
+    }
 
     @PostMapping("/add")
     public ResponseEntity<Map<String, String>> addTask(@RequestBody Map<String, Object> request, HttpServletRequest httpRequest) {
@@ -151,6 +271,16 @@ public class SchedulerController {
     @GetMapping("/config")
     public ResponseEntity<Map<String, Object>> getConfig() {
         return ResponseEntity.ok(schedulerService.getConfig());
+    }
+
+    @PostMapping("/training-image")
+    public ResponseEntity<Map<String, String>> setTrainingImage(@RequestBody Map<String, Object> request) {
+        String image = (String) request.get("image");
+        schedulerService.setTrainingImage(image);
+        Map<String, String> response = new HashMap<>();
+        response.put("message", "训练镜像已更新");
+        response.put("status", "success");
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/queue")
