@@ -8,6 +8,7 @@ import com.example.yoloproject.repository.DatasetRepository;
 import com.example.yoloproject.repository.TrainingRecordRepository;
 import com.example.yoloproject.repository.NodeLogRepository;
 import com.example.yoloproject.repository.ModelLibraryRepository;
+import com.example.yoloproject.entity.SystemConfig;
 import com.example.yoloproject.repository.SystemConfigRepository;
 import io.kubernetes.client.openapi.models.V1Job;
 import org.slf4j.Logger;
