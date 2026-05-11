@@ -46,7 +46,6 @@ public class NodeController {
                 filtered.setMemoryAllocatable(n.getMemoryAllocatable());
                 filtered.setGpuAllocatable(n.getGpuAllocatable());
                 filtered.setCurrentTasks(n.getCurrentTasks());
-                filtered.setRemainingSlots(n.getRemainingSlots());
                 filtered.setMaxConcurrentTasks(n.getMaxConcurrentTasks());
                 return filtered;
             }).collect(Collectors.toList());

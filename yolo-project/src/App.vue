@@ -378,7 +378,8 @@
       </div>
       <template #footer><el-button @click="predictResultVisible=false">关闭</el-button></template>
     </el-dialog>
-  </div>
+  </main>
+</div>
 </template>
 
 <script setup>

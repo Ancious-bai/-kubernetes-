@@ -1133,7 +1133,7 @@ public class YoloService {
             if (dataset != null && dataset.getSizeBytes() != null) {
                 datasetSizeBytes = dataset.getSizeBytes();
             } else {
-                String dataDir = projectRoot + dataName;
+                String dataDir = PROJECT_ROOT + dataName;
                 File dir = new File(dataDir);
                 if (dir.exists()) {
                     datasetSizeBytes = getDirectorySize(dir);
