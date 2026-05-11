@@ -66,8 +66,8 @@ def main():
         name=test_name,
         project=project_dir,
         device="cpu",
-        plots=False,
-        visualize=False,
+        plots=True,
+        visualize=True,
         cache=False,
     )
 

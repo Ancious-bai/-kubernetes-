@@ -85,12 +85,12 @@ public class ModelLibraryController {
 
         String projectRoot = yoloService.getProjectRoot();
         String trainDirName = recordName + "_train";
-        String weightsDir = projectRoot + "runs/train/" + trainDirName + "/weights";
+        String weightsDir = projectRoot + "runs/detect/" + trainDirName + "/weights";
         String modelFile = modelType.equals("last") ? "last.pt" : "best.pt";
         String sourcePath = weightsDir + "/" + modelFile;
 
         if (!new File(sourcePath).exists()) {
-            response.put("message", "模型文件不存在: " + modelFile);
+            response.put("message", "模型文件不存在: " + sourcePath);
             response.put("status", "error");
             return ResponseEntity.badRequest().body(response);
         }
@@ -109,7 +109,7 @@ public class ModelLibraryController {
         }
 
         Double map50 = null, map5095 = null, precision = null, recall = null;
-        String resultsCsvFile = projectRoot + "runs/train/" + trainDirName + "/results.csv";
+        String resultsCsvFile = projectRoot + "runs/detect/" + trainDirName + "/results.csv";
         if (!new File(resultsCsvFile).exists()) {
             resultsCsvFile = projectRoot + "runs/detect/" + trainDirName + "/results.csv";
         }
