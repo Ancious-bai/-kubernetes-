@@ -23,7 +23,7 @@ public class NodeLog {
     @Column(name = "task_type", nullable = false, length = 10)
     private String taskType;
 
-    @Column(name = "status")
+    @Column(name = "`status`")
     private String status;
 
     @Column(name = "epochs")

@@ -38,7 +38,7 @@ public class ModelLibrary {
     @Column(name = "map50_95")
     private Double map5095;
 
-    @Column(name = "precision")
+    @Column(name = "`precision`")
     private Double precision;
 
     @Column(name = "recall")
