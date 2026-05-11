@@ -13,6 +13,8 @@ spec:
       labels:
         app: yolo-frontend
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: master
       containers:
         - name: frontend
           image: docker.io/ancious/yolo-frontend:v1.0.0

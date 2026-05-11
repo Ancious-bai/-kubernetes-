@@ -1,7 +1,9 @@
 package com.example.yoloproject.controller;
 
+import com.example.yoloproject.entity.InferenceRecord;
 import com.example.yoloproject.entity.ModelLibrary;
 import com.example.yoloproject.entity.TrainingRecord;
+import com.example.yoloproject.repository.InferenceRecordRepository;
 import com.example.yoloproject.repository.ModelLibraryRepository;
 import com.example.yoloproject.repository.TrainingRecordRepository;
 import com.example.yoloproject.service.AuthService;
@@ -28,6 +30,9 @@ public class ModelLibraryController {
 
     @Autowired
     private TrainingRecordRepository trainingRecordRepository;
+
+    @Autowired
+    private InferenceRecordRepository inferenceRecordRepository;
 
     @Autowired
     private YoloService yoloService;
@@ -74,7 +79,7 @@ public class ModelLibraryController {
 
         String projectRoot = yoloService.getProjectRoot();
         String trainDirName = recordName + "_train";
-        String weightsDir = projectRoot + "runs/detect/" + trainDirName + "/weights";
+        String weightsDir = projectRoot + "runs/train/" + trainDirName + "/weights";
         String modelFile = modelType.equals("last") ? "last.pt" : "best.pt";
         String sourcePath = weightsDir + "/" + modelFile;
 
@@ -97,6 +102,26 @@ public class ModelLibraryController {
             return ResponseEntity.status(500).body(response);
         }
 
+        Double map50 = null, map5095 = null, precision = null, recall = null;
+        String resultsFile = projectRoot + "runs/train/" + trainDirName + "/results.txt";
+        if (new File(resultsFile).exists()) {
+            try {
+                List<String> lines = Files.readAllLines(Paths.get(resultsFile));
+                for (String line : lines) {
+                    if (line.contains("mAP50")) {
+                        String[] parts = line.split("\\s+");
+                        for (int i = 0; i < parts.length; i++) {
+                            if ("mAP50".equals(parts[i]) && i + 1 < parts.length) {
+                                try { map50 = Double.parseDouble(parts[i + 1]); } catch (Exception ignored) {}
+                            } else if ("mAP50-95".equals(parts[i]) && i + 1 < parts.length) {
+                                try { map5095 = Double.parseDouble(parts[i + 1]); } catch (Exception ignored) {}
+                            }
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
         ModelLibrary model = new ModelLibrary();
         model.setModelName(modelName);
         model.setDataName(record.getDataName());
@@ -105,6 +130,10 @@ public class ModelLibraryController {
         model.setModelPath(destPath);
         model.setEpochs(record.getEpochs());
         model.setImgsz(record.getImgsz());
+        model.setMap50(map50);
+        model.setMap5095(map5095);
+        model.setPrecision(precision);
+        model.setRecall(recall);
         model.setCreatedBy(username);
         modelLibraryRepository.save(model);
 
@@ -143,6 +172,8 @@ public class ModelLibraryController {
         } catch (Exception e) {
         }
 
+        inferenceRecordRepository.findByModelId(id).forEach(inferenceRecordRepository::delete);
+
         modelLibraryRepository.deleteById(id);
         authService.logOperation(null, username, "DELETE_MODEL", model.getModelName(),
                 "从模型库删除模型: " + model.getModelName());
@@ -150,6 +181,37 @@ public class ModelLibraryController {
         response.put("message", "模型已删除");
         response.put("status", "success");
         return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/inferences")
+    public ResponseEntity<List<InferenceRecord>> listInferences(
+            @RequestParam(required = false) String modelName,
+            @RequestParam(required = false) String dataName,
+            HttpServletRequest httpRequest) {
+        String role = (String) httpRequest.getAttribute("role");
+        String username = (String) httpRequest.getAttribute("username");
+
+        List<InferenceRecord> records = inferenceRecordRepository.findAllByOrderByCreatedAtDesc();
+        
+        if (!"ROOT".equals(role)) {
+            records = records.stream()
+                    .filter(r -> username.equals(r.getCreatedBy()))
+                    .collect(Collectors.toList());
+        }
+
+        if (modelName != null && !modelName.isEmpty()) {
+            records = records.stream()
+                    .filter(r -> r.getModelName().contains(modelName))
+                    .collect(Collectors.toList());
+        }
+
+        if (dataName != null && !dataName.isEmpty()) {
+            records = records.stream()
+                    .filter(r -> r.getDataName().equals(dataName))
+                    .collect(Collectors.toList());
+        }
+
+        return ResponseEntity.ok(records);
     }
 
     @PostMapping("/{id}/predict")
@@ -182,8 +244,19 @@ public class ModelLibraryController {
         }
         final String effectiveImagesDir = imagesDir;
 
-        String predictDir = projectRoot + "runs/detect/" + model.getModelName() + "_predict_" + targetDataName;
-        final String effectivePredictName = model.getModelName() + "_predict_" + targetDataName;
+        String predictDirName = model.getModelName() + "_predict_" + targetDataName;
+        String predictDir = projectRoot + "runs/detect/" + predictDirName;
+        final String effectivePredictDir = predictDir;
+        final String effectivePredictName = predictDirName;
+
+        InferenceRecord record = new InferenceRecord();
+        record.setModelId(id);
+        record.setModelName(model.getModelName());
+        record.setDataName(targetDataName);
+        record.setCreatedBy(username);
+        record.setPredictDir(predictDir);
+        inferenceRecordRepository.save(record);
+        final Long recordId = record.getId();
 
         authService.logOperation(null, username, "PREDICT", model.getModelName(),
                 "使用模型 " + model.getModelName() + " 推理数据集 " + targetDataName);
@@ -198,15 +271,56 @@ public class ModelLibraryController {
                 Process process = pb.start();
                 process.waitFor(10, java.util.concurrent.TimeUnit.MINUTES);
                 process.destroyForcibly();
+
+                Map<String, Double> metrics = extractMetrics(effectivePredictDir);
+                InferenceRecord ir = inferenceRecordRepository.findById(recordId).orElse(null);
+                if (ir != null) {
+                    ir.setMap50(metrics.get("map50"));
+                    ir.setMap5095(metrics.get("map50_95"));
+                    ir.setPrecision(metrics.get("precision"));
+                    ir.setRecall(metrics.get("recall"));
+                    ir.setStatus("completed");
+                    inferenceRecordRepository.save(ir);
+                }
             } catch (Exception e) {
-                // ignore
+                InferenceRecord ir = inferenceRecordRepository.findById(recordId).orElse(null);
+                if (ir != null) {
+                    ir.setStatus("failed");
+                    inferenceRecordRepository.save(ir);
+                }
             }
         }).start();
 
         response.put("message", "推理任务已提交");
         response.put("status", "success");
         response.put("predictDir", predictDir);
+        response.put("recordId", recordId);
         return ResponseEntity.ok(response);
+    }
+
+    private Map<String, Double> extractMetrics(String predictDir) {
+        Map<String, Double> metrics = new HashMap<>();
+        File resultsFile = new File(predictDir, "results.txt");
+        if (resultsFile.exists()) {
+            try {
+                List<String> lines = Files.readAllLines(resultsFile.toPath());
+                for (String line : lines) {
+                    String[] parts = line.split("\\s+");
+                    for (int i = 0; i < parts.length; i++) {
+                        if ("mAP50".equals(parts[i]) && i + 1 < parts.length) {
+                            try { metrics.put("map50", Double.parseDouble(parts[i + 1])); } catch (Exception ignored) {}
+                        } else if ("mAP50-95".equals(parts[i]) && i + 1 < parts.length) {
+                            try { metrics.put("map50_95", Double.parseDouble(parts[i + 1])); } catch (Exception ignored) {}
+                        } else if ("precision".equals(parts[i]) && i + 1 < parts.length) {
+                            try { metrics.put("precision", Double.parseDouble(parts[i + 1])); } catch (Exception ignored) {}
+                        } else if ("recall".equals(parts[i]) && i + 1 < parts.length) {
+                            try { metrics.put("recall", Double.parseDouble(parts[i + 1])); } catch (Exception ignored) {}
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        return metrics;
     }
 
     @GetMapping("/{id}/predict-results")
@@ -290,5 +404,53 @@ public class ModelLibraryController {
         } catch (Exception e) {
             try { httpResponse.setStatus(500); } catch (Exception ex) {}
         }
+    }
+
+    @DeleteMapping("/inferences/{id}")
+    public ResponseEntity<Map<String, Object>> deleteInference(@PathVariable Long id,
+                                                               HttpServletRequest httpRequest) {
+        String role = (String) httpRequest.getAttribute("role");
+        String username = (String) httpRequest.getAttribute("username");
+        Map<String, Object> response = new HashMap<>();
+
+        InferenceRecord record = inferenceRecordRepository.findById(id).orElse(null);
+        if (record == null) {
+            response.put("message", "推理记录不存在");
+            response.put("status", "error");
+            return ResponseEntity.status(404).body(response);
+        }
+
+        if (!"ROOT".equals(role) && !username.equals(record.getCreatedBy())) {
+            response.put("message", "无权限删除此记录");
+            response.put("status", "error");
+            return ResponseEntity.status(403).body(response);
+        }
+
+        try {
+            File dir = new File(record.getPredictDir());
+            if (dir.exists() && dir.isDirectory()) {
+                deleteDirectory(dir);
+            }
+        } catch (Exception ignored) {}
+
+        inferenceRecordRepository.deleteById(id);
+
+        response.put("message", "推理记录已删除");
+        response.put("status", "success");
+        return ResponseEntity.ok(response);
+    }
+
+    private void deleteDirectory(File dir) {
+        File[] files = dir.listFiles();
+        if (files != null) {
+            for (File f : files) {
+                if (f.isDirectory()) {
+                    deleteDirectory(f);
+                } else {
+                    f.delete();
+                }
+            }
+        }
+        dir.delete();
     }
 }

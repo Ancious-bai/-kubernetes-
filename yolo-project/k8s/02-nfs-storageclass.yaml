@@ -17,6 +17,8 @@ spec:
       labels:
         app: nfs-provisioner
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: master
       serviceAccountName: nfs-provisioner
       containers:
         - name: nfs-subdir-external-provisioner

@@ -87,7 +87,15 @@ public class NodeManagementService {
     }
 
     public List<NodeInfo> getSchedulableNodes() {
-        return nodeInfoRepository.findBySchedulableTrue();
+        return nodeInfoRepository.findBySchedulableTrue().stream()
+                .filter(n -> !isMasterNode(n.getNodeName()))
+                .collect(Collectors.toList());
+    }
+
+    private boolean isMasterNode(String nodeName) {
+        return nodeName != null && (nodeName.equalsIgnoreCase("master") || 
+                nodeName.equalsIgnoreCase("control-plane") ||
+                nodeName.contains("-master") || nodeName.contains("master-"));
     }
 
     public Optional<NodeInfo> getNodeByName(String nodeName) {

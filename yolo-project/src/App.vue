@@ -147,6 +147,43 @@
             </table>
           </div>
         </el-card>
+
+        <div class="page-header" style="display:flex;justify-content:space-between;align-items:center;margin-top:24px"><h2>推理记录</h2></div>
+        <el-card shadow="hover" style="margin-top:14px" class="filter-card">
+          <div class="filter-row">
+            <div class="filter-item"><span class="filter-label">模型名称</span><el-input v-model="inferenceFilter.modelName" placeholder="搜索模型名称" clearable size="small" style="width:180px" /></div>
+            <div class="filter-item"><span class="filter-label">数据集</span><el-input v-model="inferenceFilter.dataName" placeholder="搜索数据集" clearable size="small" style="width:150px" /></div>
+            <el-button type="primary" size="small" @click="loadInferenceRecords">查询</el-button>
+            <el-button size="small" @click="resetInferenceFilter">重置</el-button>
+          </div>
+        </el-card>
+        <el-card shadow="hover" style="margin-top:14px">
+          <div style="overflow-x:auto">
+            <table class="records-table">
+              <thead><tr>
+                <th>模型名称</th><th>推理数据集</th><th>mAP50</th><th>mAP50-95</th><th>精确率</th><th>召回率</th><th>状态</th><th>提交者</th><th>创建时间</th><th>操作</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="inf in inferenceList" :key="inf.id">
+                  <td><span style="font-weight:600">{{ inf.modelName }}</span></td>
+                  <td><span>{{ inf.dataName }}</span></td>
+                  <td><span v-if="inf.map50!=null">{{ (inf.map50*100).toFixed(1) }}%</span><span v-else>-</span></td>
+                  <td><span v-if="inf.map5095!=null">{{ (inf.map5095*100).toFixed(1) }}%</span><span v-else>-</span></td>
+                  <td><span v-if="inf.precision!=null">{{ (inf.precision*100).toFixed(1) }}%</span><span v-else>-</span></td>
+                  <td><span v-if="inf.recall!=null">{{ (inf.recall*100).toFixed(1) }}%</span><span v-else>-</span></td>
+                  <td><el-tag :type="inf.status==='completed'?'success':(inf.status==='running'?'warning':'danger')" size="small">{{ inf.status==='completed'?'已完成':(inf.status==='running'?'运行中':'失败') }}</el-tag></td>
+                  <td><span>{{ inf.createdBy }}</span></td>
+                  <td><span class="param-fixed">{{ inf.createdAt }}</span></td>
+                  <td><div class="record-actions">
+                    <el-button v-if="inf.status==='completed'" size="small" type="primary" @click="showPredictImages(inf)">查看图片</el-button>
+                    <el-button v-if="currentUser.role==='ROOT'||inf.createdBy===currentUser.username" size="small" type="danger" @click="handleDeleteInference(inf)">删除</el-button>
+                  </div></td>
+                </tr>
+                <tr v-if="!inferenceList.length"><td colspan="10" style="color:#909399">暂无推理记录</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </el-card>
       </div>
 
       <div v-show="activePage==='logs'" class="page-logs">
@@ -237,10 +274,11 @@
                 <span style="font-weight:700;font-size:15px">{{ row.nodeName }}</span>
                 <el-tag :type="row.roles&&row.roles.includes('control-plane')?'danger':'primary'" size="small">{{ row.roles&&row.roles.includes('control-plane')?'Master':'Worker' }}</el-tag>
                 <el-tag :type="row.ready?'success':'danger'" size="small">{{ row.ready?'就绪':'未就绪' }}</el-tag>
-                <el-tag v-if="isAdmin" :type="row.schedulable?'success':'warning'" size="small">{{ row.schedulable?'可调度':'已停止' }}</el-tag>
+                <el-tag v-if="isAdmin && !(row.roles&&row.roles.includes('control-plane'))" :type="row.schedulable?'success':'warning'" size="small">{{ row.schedulable?'可调度':'已停止' }}</el-tag>
+                <el-tag v-if="row.roles&&row.roles.includes('control-plane')" type="info" size="small">不参与训练调度</el-tag>
                 <span v-if="isAdmin" style="color:#909399;font-size:12px">{{ row.nodeIp }}</span>
               </div>
-              <div v-if="isAdmin" class="record-actions">
+              <div v-if="isAdmin && !(row.roles&&row.roles.includes('control-plane'))" class="record-actions">
                 <el-button v-if="row.schedulable" size="small" type="warning" @click="cordonNode(row.nodeName)">停止调度</el-button>
                 <el-button v-else size="small" type="success" @click="uncordonNode(row.nodeName)">恢复调度</el-button>
               </div>
@@ -270,7 +308,7 @@
             </div>
           </div>
 
-          <div v-if="nodeDetailMap[row.nodeName] && nodeDetailMap[row.nodeName].trainingPods && nodeDetailMap[row.nodeName].trainingPods.length" style="margin-top:12px">
+          <div v-if="!(row.roles&&row.roles.includes('control-plane')) && nodeDetailMap[row.nodeName] && nodeDetailMap[row.nodeName].trainingPods && nodeDetailMap[row.nodeName].trainingPods.length" style="margin-top:12px">
             <h4 style="margin:0 0 8px;font-size:13px;color:#606266">运行中的训练任务</h4>
             <div style="overflow-x:auto">
               <table class="records-table" style="font-size:12px">
@@ -290,7 +328,8 @@
               </table>
             </div>
           </div>
-          <div v-else style="margin-top:8px;color:#909399;font-size:13px;text-align:center;padding:8px">当前无运行中的训练任务</div>
+          <div v-if="!(row.roles&&row.roles.includes('control-plane')) && (!nodeDetailMap[row.nodeName] || !nodeDetailMap[row.nodeName].trainingPods || !nodeDetailMap[row.nodeName].trainingPods.length)" style="margin-top:8px;color:#909399;font-size:13px;text-align:center;padding:8px">当前无运行中的训练任务</div>
+          <div v-if="row.roles&&row.roles.includes('control-plane')" style="margin-top:8px;color:#909399;font-size:13px;text-align:center;padding:8px">Master节点不参与训练调度</div>
         </el-card>
 
         <el-card v-if="isAdmin" shadow="hover" style="margin-top:14px">
@@ -419,26 +458,28 @@
           <h4 style="margin:0 0 10px;font-size:14px">{{ estimateResult.autoSelectedNode ? '自动分配节点' : '指定节点' }}：<el-tag type="primary" size="small">{{ estimateResult.nodeName || estimateResult.autoSelectedNode }}</el-tag></h4>
           <div class="est-res-grid">
             <div class="est-res-item">
-              <div class="est-res-label">节点CPU</div>
+              <div class="est-res-label">CPU</div>
               <div class="est-res-bar"><el-progress :percentage="parseFloat(estimateResult.nodeCpuTotal)?Math.round(parseFloat(estimateResult.nodeCpuUsed)/parseFloat(estimateResult.nodeCpuTotal)*100):0" :stroke-width="16" :color="parseFloat(estimateResult.nodeCpuRemaining)<1?'#f56c6c':'#409eff'" :format="()=>estimateResult.nodeCpuUsed+' / '+estimateResult.nodeCpuTotal+' 核'" /></div>
               <div class="est-res-sub">剩余 <span :style="{color:parseFloat(estimateResult.nodeCpuRemaining)<1?'#f56c6c':'#67c23a',fontWeight:600}">{{ estimateResult.nodeCpuRemaining }}</span> 核</div>
             </div>
             <div class="est-res-item">
-              <div class="est-res-label">节点内存</div>
+              <div class="est-res-label">内存</div>
               <div class="est-res-bar"><el-progress :percentage="parseFloat(estimateResult.nodeMemTotalMB)?Math.round(parseFloat(estimateResult.nodeMemUsedMB)/parseFloat(estimateResult.nodeMemTotalMB)*100):0" :stroke-width="16" :color="parseFloat(estimateResult.nodeMemRemainingMB)<1024?'#f56c6c':'#67c23a'" :format="()=>(parseFloat(estimateResult.nodeMemUsedMB)/1024).toFixed(1)+' / '+(parseFloat(estimateResult.nodeMemTotalMB)/1024).toFixed(1)+' GB'" /></div>
               <div class="est-res-sub">剩余 <span :style="{color:parseFloat(estimateResult.nodeMemRemainingMB)<1024?'#f56c6c':'#67c23a',fontWeight:600}">{{ (parseFloat(estimateResult.nodeMemRemainingMB)/1024).toFixed(1) }}</span> GB</div>
             </div>
           </div>
           <div v-if="estimateResult.cpuAfterTask!=null" style="margin-top:10px">
-            <h4 style="margin:0 0 8px;font-size:13px;color:#606266">任务后预计剩余</h4>
+            <h4 style="margin:0 0 8px;font-size:13px;color:#606266">任务提交后资源预测</h4>
             <div class="est-res-grid">
               <div class="est-res-item">
                 <div class="est-res-label">CPU</div>
-                <div class="est-res-bar"><el-progress :percentage="parseFloat(estimateResult.nodeCpuTotal)?Math.round((parseFloat(estimateResult.nodeCpuTotal)-parseFloat(estimateResult.cpuAfterTask))/parseFloat(estimateResult.nodeCpuTotal)*100):0" :stroke-width="14" :color="parseFloat(estimateResult.cpuAfterTask)<1?'#f56c6c':'#409eff'" :format="()=>estimateResult.cpuAfterTask+' 核'" /></div>
+                <div class="est-res-bar"><el-progress :percentage="parseFloat(estimateResult.nodeCpuTotal)?Math.round((parseFloat(estimateResult.nodeCpuTotal)-parseFloat(estimateResult.cpuAfterTask))/parseFloat(estimateResult.nodeCpuTotal)*100):0" :stroke-width="14" :color="parseFloat(estimateResult.cpuAfterTask)<1?'#f56c6c':'#409eff'" :format="()=>(parseFloat(estimateResult.nodeCpuTotal)-parseFloat(estimateResult.cpuAfterTask)).toFixed(1)+' / '+estimateResult.nodeCpuTotal+' 核'" /></div>
+                <div class="est-res-sub">预计剩余 <span :style="{color:parseFloat(estimateResult.cpuAfterTask)<1?'#f56c6c':'#67c23a',fontWeight:600}">{{ estimateResult.cpuAfterTask }}</span> 核</div>
               </div>
               <div class="est-res-item">
                 <div class="est-res-label">内存</div>
-                <div class="est-res-bar"><el-progress :percentage="parseFloat(estimateResult.nodeMemTotalMB)?Math.round((parseFloat(estimateResult.nodeMemTotalMB)-parseFloat(estimateResult.memAfterTaskMB))/parseFloat(estimateResult.nodeMemTotalMB)*100):0" :stroke-width="14" :color="parseFloat(estimateResult.memAfterTaskMB)<1024?'#f56c6c':'#67c23a'" :format="()=>(parseFloat(estimateResult.memAfterTaskMB)/1024).toFixed(1)+' GB'" /></div>
+                <div class="est-res-bar"><el-progress :percentage="parseFloat(estimateResult.nodeMemTotalMB)?Math.round((parseFloat(estimateResult.nodeMemTotalMB)-parseFloat(estimateResult.memAfterTaskMB))/parseFloat(estimateResult.nodeMemTotalMB)*100):0" :stroke-width="14" :color="parseFloat(estimateResult.memAfterTaskMB)<1024?'#f56c6c':'#67c23a'" :format="()=>((parseFloat(estimateResult.nodeMemTotalMB)-parseFloat(estimateResult.memAfterTaskMB))/1024).toFixed(1)+' / '+(parseFloat(estimateResult.nodeMemTotalMB)/1024).toFixed(1)+' GB'" /></div>
+                <div class="est-res-sub">预计剩余 <span :style="{color:parseFloat(estimateResult.memAfterTaskMB)<1024?'#f56c6c':'#67c23a',fontWeight:600}">{{ (parseFloat(estimateResult.memAfterTaskMB)/1024).toFixed(1) }}</span> GB</div>
               </div>
             </div>
           </div>
@@ -458,6 +499,18 @@
         <el-form-item label="类型"><el-radio-group v-model="saveModelForm.modelType"><el-radio label="best">最佳模型(best.pt)</el-radio><el-radio label="last">最后模型(last.pt)</el-radio></el-radio-group></el-form-item>
       </el-form>
       <template #footer><el-button type="primary" @click="confirmSaveModel" :loading="saveModelLoading">保存到模型库</el-button></template>
+    </el-dialog>
+
+    <el-dialog title="推理结果图片" v-model="viewPredictImagesVisible" width="800px" :close-on-click-modal="false">
+      <div v-if="viewPredictImagesLoading" style="text-align:center;padding:40px"><el-icon class="is-loading" size="24"><Loading /></el-icon><p>加载中...</p></div>
+      <div v-else-if="viewPredictImagesList.length===0" style="text-align:center;padding:40px;color:#909399">暂无推理结果图片</div>
+      <div v-else style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-height:500px;overflow-y:auto">
+        <div v-for="img in viewPredictImagesList" :key="img.name" style="cursor:pointer" @click="openViewPredictImage(img.name)">
+          <img :src="getViewPredictImageUrl(img.name)" :alt="img.name" style="width:100%;height:150px;object-fit:cover;border-radius:8px" />
+          <div style="text-align:center;margin-top:4px;font-size:12px;color:#606266;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ img.name }}</div>
+        </div>
+      </div>
+      <template #footer><el-button @click="viewPredictImagesVisible=false">关闭</el-button></template>
     </el-dialog>
 
     <el-dialog title="分布式训练配置" v-model="showDistributedTrainDialog" width="520px" :close-on-click-modal="false">
@@ -584,8 +637,11 @@ const systemSort=reactive({field:'',order:'asc'})
 const runsResultVisible=ref(false),runsResultLoading=ref(false),runsResultData=ref({}),runsResultTitle=ref(''),runsResultCurrentRecord=ref(''),runsResultCurrentType=ref('')
 const runsFileVisible=ref(false),runsFileTitle=ref(''),runsFileContent=ref('')
 const modelList=ref([])
+const inferenceList=ref([])
+const inferenceFilter=reactive({modelName:'',dataName:''})
 const predictDialogVisible=ref(false),predictForm=reactive({modelId:null,modelName:'',dataName:''}),predictLoading=ref(false)
 const predictResultVisible=ref(false),predictResultLoading=ref(false),predictResultImages=ref([]),predictResultModelId=ref(null),predictResultDataName=ref('')
+const viewPredictImagesVisible=ref(false),viewPredictImagesList=ref([]),viewPredictImagesModelId=ref(null),viewPredictImagesDataName=ref('')
 const showDistributedTrainDialog=ref(false),distributedTrainForm=reactive({dataName:'',epochs:2,imgsz:640,targetNode:'',gpuType:'',gpuCount:1})
 const schedulableNodes=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable))
 const totalMaxConcurrent=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+(n.maxConcurrentTasks||1),0))
@@ -736,14 +792,20 @@ const getCpuCoreCount=row=>{const v=row.cpuAllocatable||row.cpuCapacity||'4';con
 const viewRunsResult=async(recordName,type)=>{runsResultCurrentRecord.value=recordName;runsResultCurrentType.value=type;runsResultTitle.value=`${recordName} - ${type==='train'?'训练':'测试'}结果`;runsResultVisible.value=true;runsResultLoading.value=true;runsResultData.value={};try{const r=await api.value.get(`/api/nodes/runs/${recordName}/${type}`);runsResultData.value=r.data}catch(e){runsResultData.value={exists:false}}finally{runsResultLoading.value=false}}
 const loadRunsFile=async(recordName,type,path)=>{try{const r=await api.value.get(`/api/nodes/runs/${recordName}/${type}/file`,{params:{path}});if(r.data.content){runsFileTitle.value=r.data.fileName||path;runsFileContent.value=r.data.content;runsFileVisible.value=true}else{showMsg(r.data.error||'文件读取失败','error')}}catch(e){showMsg('文件读取失败','error')}}
 
-const switchToModels=()=>{activePage.value='models';loadModelList()}
+const switchToModels=()=>{activePage.value='models';loadModelList();loadInferenceRecords()}
 const loadModelList=async()=>{try{const r=await api.value.get('/api/models');modelList.value=r.data}catch(e){}}
 const showPredictDialog=m=>{predictForm.modelId=m.id;predictForm.modelName=m.modelName;predictForm.dataName='';predictDialogVisible.value=true}
 const handlePredict=async()=>{if(!predictForm.dataName){showMsg('请选择目标数据集','warning');return}predictLoading.value=true;try{const r=await api.value.post(`/api/models/${predictForm.modelId}/predict`,{dataName:predictForm.dataName});if(r.data.status==='success'){showMsg('推理任务已提交');predictDialogVisible.value=false;predictResultModelId.value=predictForm.modelId;predictResultDataName.value=predictForm.dataName;predictResultVisible.value=true;predictResultLoading.value=true;predictResultImages.value=[];pollPredictResults()}}catch(e){showMsg(e.response?.data?.message||'推理失败','error')}finally{predictLoading.value=false}}
 const pollPredictResults=async()=>{const iv=setInterval(async()=>{try{const r=await api.value.get(`/api/models/${predictResultModelId.value}/predict-results`,{params:{dataName:predictResultDataName.value}});if(r.data.exists){predictResultImages.value=r.data.images||[];predictResultLoading.value=false;clearInterval(iv)}}catch(e){}},3000);setTimeout(()=>{clearInterval(iv);predictResultLoading.value=false},60000)}
 const getPredictImageUrl=name=>`/api/models/${predictResultModelId.value}/predict-image?dataName=${encodeURIComponent(predictResultDataName.value)}&imageName=${encodeURIComponent(name)}&token=${token.value}`
 const openPredictImage=name=>{window.open(getPredictImageUrl(name),'_blank')}
-const handleDeleteModel=async m=>{try{await api.value.delete(`/api/models/${m.id}`);showMsg('模型已删除');loadModelList()}catch(e){showMsg(e.response?.data?.message||'删除失败','error')}}
+const handleDeleteModel=async m=>{try{await api.value.delete(`/api/models/${m.id}`);showMsg('模型已删除');loadModelList();loadInferenceRecords()}catch(e){showMsg(e.response?.data?.message||'删除失败','error')}}
+const loadInferenceRecords=async()=>{try{const params={};if(inferenceFilter.modelName)params.modelName=inferenceFilter.modelName;if(inferenceFilter.dataName)params.dataName=inferenceFilter.dataName;const r=await api.value.get('/api/models/inferences',{params});inferenceList.value=r.data}catch(e){}}
+const resetInferenceFilter=()=>{inferenceFilter.modelName='';inferenceFilter.dataName='';loadInferenceRecords()}
+const showPredictImages=async inf=>{viewPredictImagesModelId.value=inf.modelId;viewPredictImagesDataName.value=inf.dataName;viewPredictImagesVisible.value=true;viewPredictImagesLoading.value=true;try{const r=await api.value.get(`/api/models/${inf.modelId}/predict-results`,{params:{dataName:inf.dataName}});if(r.data.exists){viewPredictImagesList.value=r.data.images||[]}else{viewPredictImagesList.value=[]}}catch(e){viewPredictImagesList.value=[]}finally{viewPredictImagesLoading.value=false}}
+const getViewPredictImageUrl=name=>`/api/models/${viewPredictImagesModelId.value}/predict-image?dataName=${encodeURIComponent(viewPredictImagesDataName.value)}&imageName=${encodeURIComponent(name)}&token=${token.value}`
+const openViewPredictImage=name=>{window.open(getViewPredictImageUrl(name),'_blank')}
+const handleDeleteInference=async inf=>{try{await api.value.delete(`/api/models/inferences/${inf.id}`);showMsg('推理记录已删除');loadInferenceRecords()}catch(e){showMsg(e.response?.data?.message||'删除失败','error')}}
 
 const setLogRef=(n,t,el)=>{if(el)logRefs.value[`${n}-${t}`]=el}
 const autoScroll=(n,t)=>{nextTick(()=>{const el=logRefs.value[`${n}-${t}`];if(el){const distanceToBottom=el.scrollHeight-el.scrollTop-el.clientHeight;if(distanceToBottom<=100)el.scrollTop=el.scrollHeight}})}
