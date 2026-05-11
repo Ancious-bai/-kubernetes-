@@ -272,13 +272,13 @@
             <div style="display:flex;justify-content:space-between;align-items:center">
               <div style="display:flex;align-items:center;gap:8px">
                 <span style="font-weight:700;font-size:15px">{{ row.nodeName }}</span>
-                <el-tag :type="isMasterNode(row)?'danger':'primary'" size="small">{{ isMasterNode(row)?'Master':'Worker' }}</el-tag>
+                <el-tag :type="row.roles&&row.roles.includes('control-plane')?'danger':'primary'" size="small">{{ row.roles&&row.roles.includes('control-plane')?'Master':'Worker' }}</el-tag>
                 <el-tag :type="row.ready?'success':'danger'" size="small">{{ row.ready?'就绪':'未就绪' }}</el-tag>
-                <el-tag v-if="isAdmin && !isMasterNode(row)" :type="row.schedulable?'success':'warning'" size="small">{{ row.schedulable?'可调度':'已停止' }}</el-tag>
-                <el-tag v-if="isMasterNode(row)" type="info" size="small">不参与训练调度</el-tag>
+                <el-tag v-if="isAdmin && !(row.roles&&row.roles.includes('control-plane'))" :type="row.schedulable?'success':'warning'" size="small">{{ row.schedulable?'可调度':'已停止' }}</el-tag>
+                <el-tag v-if="row.roles&&row.roles.includes('control-plane')" type="info" size="small">不参与训练调度</el-tag>
                 <span v-if="isAdmin" style="color:#909399;font-size:12px">{{ row.nodeIp }}</span>
               </div>
-              <div v-if="isAdmin && !isMasterNode(row)" class="record-actions">
+              <div v-if="isAdmin && !(row.roles&&row.roles.includes('control-plane'))" class="record-actions">
                 <el-button v-if="row.schedulable" size="small" type="warning" @click="cordonNode(row.nodeName)">停止调度</el-button>
                 <el-button v-else size="small" type="success" @click="uncordonNode(row.nodeName)">恢复调度</el-button>
               </div>
@@ -308,7 +308,7 @@
             </div>
           </div>
 
-          <div v-if="!isMasterNode(row) && nodeDetailMap[row.nodeName] && nodeDetailMap[row.nodeName].trainingPods && nodeDetailMap[row.nodeName].trainingPods.length" style="margin-top:12px">
+          <div v-if="!(row.roles&&row.roles.includes('control-plane')) && nodeDetailMap[row.nodeName] && nodeDetailMap[row.nodeName].trainingPods && nodeDetailMap[row.nodeName].trainingPods.length" style="margin-top:12px">
             <h4 style="margin:0 0 8px;font-size:13px;color:#606266">运行中的训练任务</h4>
             <div style="overflow-x:auto">
               <table class="records-table" style="font-size:12px">
@@ -328,8 +328,8 @@
               </table>
             </div>
           </div>
-          <div v-if="!isMasterNode(row) && (!nodeDetailMap[row.nodeName] || !nodeDetailMap[row.nodeName].trainingPods || !nodeDetailMap[row.nodeName].trainingPods.length)" style="margin-top:8px;color:#909399;font-size:13px;text-align:center;padding:8px">当前无运行中的训练任务</div>
-          <div v-if="isMasterNode(row)" style="margin-top:8px;color:#909399;font-size:13px;text-align:center;padding:8px">Master节点不参与训练调度</div>
+          <div v-if="!(row.roles&&row.roles.includes('control-plane')) && (!nodeDetailMap[row.nodeName] || !nodeDetailMap[row.nodeName].trainingPods || !nodeDetailMap[row.nodeName].trainingPods.length)" style="margin-top:8px;color:#909399;font-size:13px;text-align:center;padding:8px">当前无运行中的训练任务</div>
+          <div v-if="row.roles&&row.roles.includes('control-plane')" style="margin-top:8px;color:#909399;font-size:13px;text-align:center;padding:8px">Master节点不参与训练调度</div>
         </el-card>
 
         <el-card v-if="isAdmin" shadow="hover" style="margin-top:14px">
@@ -654,8 +654,7 @@ const systemPodsByNode=computed(()=>{const map={};systemPods.value.forEach(p=>{c
 const systemTypeOptions=computed(()=>[...new Set(systemPods.value.map(p=>p.serviceType).filter(Boolean))])
 const systemNodeOptions=computed(()=>[...new Set(systemPods.value.map(p=>p.nodeName).filter(Boolean))])
 const filteredSystemPods=computed(()=>{let list=[...systemPods.value];if(systemSearch.name){const kw=systemSearch.name.toLowerCase();list=list.filter(p=>p.podName&&p.podName.toLowerCase().includes(kw))}if(systemSearch.type){list=list.filter(p=>p.serviceType===systemSearch.type)}if(systemSearch.node){list=list.filter(p=>p.nodeName===systemSearch.node)}if(systemSort.field==='cpu'){list.sort((a,b)=>systemSort.order==='asc'?(a.cpuRequest||0)-(b.cpuRequest||0):(b.cpuRequest||0)-(a.cpuRequest||0))}else if(systemSort.field==='mem'){list.sort((a,b)=>systemSort.order==='asc'?(a.memRequestMB||0)-(b.memRequestMB||0):(b.memRequestMB||0)-(a.memRequestMB||0))}return list})
-const workerNodesOnly=computed(()=>clusterNodes.value.filter(n=>!isMasterNode(n)))
-const isMasterNode=(row)=>row&&(row.roles&&(row.roles.includes('control-plane')||row.roles.includes('master'))||(row.nodeName&&(row.nodeName==='master'||row.nodeName==='control-plane'||row.nodeName.endsWith('-master'))))
+const workerNodesOnly=computed(()=>clusterNodes.value.filter(n=>!n.roles?.includes('control-plane')&&!n.roles?.includes('master')))
 
 const wsConnections=new Map()
 let statusRefreshTimer=null

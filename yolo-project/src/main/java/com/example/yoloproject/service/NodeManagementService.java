@@ -54,14 +54,6 @@ public class NodeManagementService {
         if (k8sClientService.isReady()) {
             for (NodeInfo node : nodes) {
                 try {
-                    if (node.getRoles() == null || node.getRoles().isEmpty()) {
-                        if (isMasterNode(node.getNodeName())) {
-                            node.setRoles("control-plane,master");
-                        } else {
-                            node.setRoles("worker");
-                        }
-                        nodeInfoRepository.save(node);
-                    }
                     int trainingPods = k8sClientService.getTrainingPodCountOnNode(node.getNodeName());
                     node.setCurrentTasks(trainingPods);
 
@@ -96,7 +88,7 @@ public class NodeManagementService {
 
     public List<NodeInfo> getSchedulableNodes() {
         return nodeInfoRepository.findBySchedulableTrue().stream()
-                .filter(n -> !isMasterNode(n))
+                .filter(n -> !isMasterNode(n.getNodeName()))
                 .collect(Collectors.toList());
     }
 
@@ -104,15 +96,6 @@ public class NodeManagementService {
         return nodeName != null && (nodeName.equalsIgnoreCase("master") || 
                 nodeName.equalsIgnoreCase("control-plane") ||
                 nodeName.contains("-master") || nodeName.contains("master-"));
-    }
-
-    private boolean isMasterNode(NodeInfo node) {
-        if (node == null) return false;
-        if (node.getRoles() != null && 
-            (node.getRoles().contains("control-plane") || node.getRoles().contains("master"))) {
-            return true;
-        }
-        return isMasterNode(node.getNodeName());
     }
 
     public Optional<NodeInfo> getNodeByName(String nodeName) {
@@ -211,15 +194,9 @@ public class NodeManagementService {
 
         Object roles = clusterInfo.get("roles");
         if (roles instanceof List) {
-            String rolesStr = String.join(",", (List<String>) roles);
-            if (!rolesStr.isEmpty()) {
-                dbNode.setRoles(rolesStr);
-            }
-        } else if (roles instanceof String && !((String) roles).isEmpty()) {
+            dbNode.setRoles(String.join(",", (List<String>) roles));
+        } else if (roles instanceof String) {
             dbNode.setRoles((String) roles);
-        }
-        if (dbNode.getRoles() == null || dbNode.getRoles().isEmpty()) {
-            dbNode.setRoles(isMasterNode(dbNode.getNodeName()) ? "control-plane,master" : "worker");
         }
 
         boolean k8sSchedulable = !(Boolean) clusterInfo.getOrDefault("unschedulable", false);
@@ -275,7 +252,8 @@ public class NodeManagementService {
     private void calculateDynamicConcurrent(NodeInfo node) {
         double cpuCores = parseCpuCores(node.getCpuAllocatable());
         long memoryMB = parseMemoryMB(node.getMemoryAllocatable());
-        boolean isMaster = isMasterNode(node);
+        boolean isMaster = node.getRoles() != null &&
+                (node.getRoles().contains("control-plane") || node.getRoles().contains("master"));
         boolean hasGpu = node.getGpuAllocatable() != null && !"0".equals(node.getGpuAllocatable());
 
         int systemReservedCores = isMaster ? 2 : 1;
@@ -367,8 +345,7 @@ public class NodeManagementService {
         result.put("nodeName", node.getNodeName());
         result.put("ip", node.getNodeIp());
         result.put("ready", node.getReady());
-        result.put("roles", node.getRoles() != null && !node.getRoles().isEmpty() ? 
-            node.getRoles() : (isMasterNode(node) ? "control-plane,master" : "worker"));
+        result.put("roles", node.getRoles());
         result.put("cpuCapacity", node.getCpuCapacity());
         result.put("cpuAllocatable", node.getCpuAllocatable());
         result.put("memoryCapacity", node.getMemoryCapacity());
@@ -486,8 +463,8 @@ public class NodeManagementService {
         overview.put("totalNodes", allNodes.size());
         overview.put("readyNodes", readyNodes.size());
         overview.put("gpuNodes", readyNodes.stream().filter(n -> n.getGpuAllocatable() != null && !"0".equals(n.getGpuAllocatable())).count());
-        overview.put("masterNodes", readyNodes.stream().filter(this::isMasterNode).count());
-        overview.put("workerNodes", readyNodes.stream().filter(n -> !isMasterNode(n)).count());
+        overview.put("masterNodes", readyNodes.stream().filter(n -> n.getRoles() != null && (n.getRoles().contains("control-plane") || n.getRoles().contains("master"))).count());
+        overview.put("workerNodes", readyNodes.stream().filter(n -> n.getRoles() != null && n.getRoles().contains("worker") && !n.getRoles().contains("control-plane") && !n.getRoles().contains("master")).count());
 
         return overview;
     }
