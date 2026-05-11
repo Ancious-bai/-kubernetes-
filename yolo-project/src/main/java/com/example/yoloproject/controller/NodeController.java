@@ -65,6 +65,17 @@ public class NodeController {
         return ResponseEntity.ok(overview);
     }
 
+    @GetMapping("/k8s-status")
+    public ResponseEntity<Map<String, Object>> getK8sStatus(HttpServletRequest httpRequest) {
+        String role = (String) httpRequest.getAttribute("role");
+        if (!"ROOT".equals(role) && !"ADMIN".equals(role)) {
+            Map<String, Object> limited = new HashMap<>();
+            limited.put("ready", nodeManagementService.getK8sStatus().get("ready"));
+            return ResponseEntity.ok(limited);
+        }
+        return ResponseEntity.ok(nodeManagementService.getK8sStatus());
+    }
+
     @GetMapping("/{nodeName}")
     public ResponseEntity<Map<String, Object>> getNodeDetail(@PathVariable String nodeName, HttpServletRequest httpRequest) {
         String role = (String) httpRequest.getAttribute("role");
@@ -139,18 +150,15 @@ public class NodeController {
     }
 
     @PostMapping("/sync")
-    public ResponseEntity<Map<String, String>> syncNodes(HttpServletRequest httpRequest) {
+    public ResponseEntity<Map<String, Object>> syncNodes(HttpServletRequest httpRequest) {
         String role = (String) httpRequest.getAttribute("role");
         String username = (String) httpRequest.getAttribute("username");
         if (!"ROOT".equals(role) && !"ADMIN".equals(role)) {
             return ResponseEntity.status(403).build();
         }
-        nodeManagementService.syncNodesFromCluster();
+        Map<String, Object> syncResult = nodeManagementService.syncNodesFromCluster();
         authService.logOperation(null, username, "CONFIG_CHANGE", "nodes", "手动同步集群节点");
-        Map<String, String> response = new HashMap<>();
-        response.put("message", "节点同步完成");
-        response.put("status", "success");
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(syncResult);
     }
 
     @PostMapping("/{nodeName}/max-concurrent")

@@ -42,11 +42,23 @@ public class NodeManagementService {
             try {
                 Thread.sleep(5000);
                 log.info("Performing initial node sync on startup...");
-                syncNodesFromCluster();
+                Map<String, Object> syncResult = syncNodesFromCluster();
+                if (syncResult != null) {
+                    log.info("Initial node sync result: status={}, syncedCount={}",
+                            syncResult.get("status"), syncResult.get("syncedCount"));
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
         }).start();
+    }
+
+    public Map<String, Object> getK8sStatus() {
+        Map<String, Object> status = new HashMap<>();
+        status.put("ready", k8sClientService.isReady());
+        status.put("coreApiStatus", k8sClientService.getCoreApiStatus());
+        status.put("batchApiStatus", k8sClientService.getBatchApiStatus());
+        return status;
     }
 
     public List<NodeInfo> getAllNodes() {
@@ -172,13 +184,22 @@ public class NodeManagementService {
     }
 
     @Scheduled(fixedDelay = 30000)
-    public void syncNodesFromCluster() {
+    public Map<String, Object> syncNodesFromCluster() {
+        Map<String, Object> result = new HashMap<>();
+        result.put("status", "success");
+
         if (!k8sClientService.isReady()) {
-            return;
+            log.warn("Node sync skipped: K8s client is not ready (coreApi={}, batchApi={})",
+                    k8sClientService.getCoreApiStatus(), k8sClientService.getBatchApiStatus());
+            result.put("status", "error");
+            result.put("message", "K8s客户端未就绪，无法同步节点");
+            result.put("syncedCount", 0);
+            return result;
         }
 
         try {
             List<Map<String, Object>> clusterNodes = k8sClientService.getNodeInfoList();
+            log.info("Got {} nodes from K8s cluster", clusterNodes.size());
             Set<String> clusterNodeNames = new HashSet<>();
 
             for (Map<String, Object> nodeInfo : clusterNodes) {
@@ -189,6 +210,7 @@ public class NodeManagementService {
                 updateNodeFromCluster(dbNode, nodeInfo);
                 calculateDynamicConcurrent(dbNode);
                 nodeInfoRepository.save(dbNode);
+                log.info("Synced node: {} (ready={}, roles={})", nodeName, dbNode.getReady(), dbNode.getRoles());
             }
 
             List<NodeInfo> dbNodes = nodeInfoRepository.findAll();
@@ -199,10 +221,17 @@ public class NodeManagementService {
                 }
             }
 
-            log.debug("Node sync completed, {} nodes from cluster", clusterNodeNames.size());
+            log.info("Node sync completed, {} nodes from cluster", clusterNodeNames.size());
+            result.put("message", "同步完成，共" + clusterNodeNames.size() + "个节点");
+            result.put("syncedCount", clusterNodeNames.size());
+            result.put("nodes", clusterNodeNames);
         } catch (Exception e) {
-            log.error("Failed to sync nodes from cluster: {}", e.getMessage());
+            log.error("Failed to sync nodes from cluster: {}", e.getMessage(), e);
+            result.put("status", "error");
+            result.put("message", "同步失败: " + e.getMessage());
+            result.put("syncedCount", 0);
         }
+        return result;
     }
 
     private void updateNodeFromCluster(NodeInfo dbNode, Map<String, Object> clusterInfo) {

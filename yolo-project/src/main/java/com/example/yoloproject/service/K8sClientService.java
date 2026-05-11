@@ -85,6 +85,7 @@ public class K8sClientService {
                         client = ClientBuilder.kubeconfig(KubeConfig.loadKubeConfig(new FileReader(winKubeConfigFile))).build();
                         log.info("K8s client: using Docker Desktop kubeconfig");
                     } else {
+                        log.warn("No kubeconfig found at: {}, {}. Trying default client...", kubeConfigPath, windowsKubeConfig);
                         client = ClientBuilder.defaultClient();
                         log.info("K8s client: using default config");
                     }
@@ -104,6 +105,14 @@ public class K8sClientService {
 
     public boolean isReady() {
         return coreApi != null && batchApi != null;
+    }
+
+    public String getCoreApiStatus() {
+        return coreApi != null ? "initialized" : "null";
+    }
+
+    public String getBatchApiStatus() {
+        return batchApi != null ? "initialized" : "null";
     }
 
     public void setNamespace(String ns) {
