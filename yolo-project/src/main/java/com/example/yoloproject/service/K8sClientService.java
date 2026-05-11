@@ -438,12 +438,12 @@ public class K8sClientService {
                     } else if (appLabel.contains("mysql") || nameLabel.contains("mysql") || serviceName.contains("mysql")) {
                         isSystemPod = true;
                         serviceType = "mysql";
-                    } else if (appLabel.contains("yolo") || appLabel.contains("backend") || nameLabel.contains("yolo") || serviceName.contains("yolo")) {
-                        isSystemPod = true;
-                        serviceType = "backend";
                     } else if (appLabel.contains("frontend") || nameLabel.contains("frontend") || serviceName.contains("frontend")) {
                         isSystemPod = true;
                         serviceType = "frontend";
+                    } else if (appLabel.contains("yolo") || appLabel.contains("backend") || nameLabel.contains("yolo") || serviceName.contains("yolo")) {
+                        isSystemPod = true;
+                        serviceType = "backend";
                     } else if (appLabel.contains("ingress") || nameLabel.contains("ingress") || k8sApp.contains("ingress")) {
                         isSystemPod = true;
                         serviceType = "ingress";

@@ -334,11 +334,18 @@
 
         <el-card shadow="hover" style="margin-top:14px" v-if="isAdmin">
           <template #header><span class="card-title">系统服务详情</span></template>
+          <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+            <el-input v-model="systemSearch.name" placeholder="搜索服务名" size="small" style="width:160px" clearable />
+            <el-select v-model="systemSearch.type" placeholder="服务类型" size="small" style="width:130px" clearable><el-option v-for="t in systemTypeOptions" :key="t" :label="getServiceTypeLabel(t)" :value="t" /></el-select>
+            <el-select v-model="systemSearch.node" placeholder="运行节点" size="small" style="width:130px" clearable><el-option v-for="n in systemNodeOptions" :key="n" :label="n" :value="n" /></el-select>
+            <el-select v-model="systemSort.field" size="small" style="width:120px"><el-option label="默认排序" value="" /><el-option label="CPU请求排序" value="cpu" /><el-option label="内存请求排序" value="mem" /></el-select>
+            <el-button size="small" @click="systemSort.order=systemSort.order==='asc'?'desc':'asc'">{{ systemSort.order==='asc'?'升序 ↑':'降序 ↓' }}</el-button>
+          </div>
           <div style="overflow-x:auto">
             <table class="records-table" style="font-size:12px">
               <thead><tr><th>服务名称</th><th>类型</th><th>命名空间</th><th>状态</th><th>运行节点</th><th>CPU请求/上限</th><th>内存请求/上限(MB)</th><th>重启次数</th><th>启动时间</th><th>运行时长</th></tr></thead>
               <tbody>
-                <tr v-for="pod in systemPods" :key="pod.podName">
+                <tr v-for="pod in filteredSystemPods" :key="pod.podName">
                   <td><span style="font-size:11px;max-width:200px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="pod.podName">{{ pod.podName }}</span></td>
                   <td><el-tag :type="getServiceTypeColor(pod.serviceType)" size="small">{{ getServiceTypeLabel(pod.serviceType) }}</el-tag></td>
                   <td><span>{{ pod.namespace }}</span></td>
@@ -348,9 +355,9 @@
                   <td><span>{{ (pod.memRequestMB||0).toFixed(0) }} / {{ (pod.memLimitMB||0).toFixed(0) }}</span></td>
                   <td><span :style="{color:pod.restarts>0?'#f56c6c':'#67c23a'}">{{ pod.restarts }}</span></td>
                   <td><span style="font-size:11px">{{ pod.startTime ? new Date(pod.startTime).toLocaleString() : '-' }}</span></td>
-                  <td><span style="font-size:11px">{{ formatStartTime(pod.startTime) }}</span></td>
+                  <td><span style="font-size:11px">{{ formatDuration(pod.startTime) }}</span></td>
                 </tr>
-                <tr v-if="!systemPods.length"><td colspan="10" style="color:#909399">暂无系统服务数据</td></tr>
+                <tr v-if="!filteredSystemPods.length"><td colspan="10" style="color:#909399">暂无匹配的系统服务</td></tr>
               </tbody>
             </table>
           </div>
@@ -390,22 +397,22 @@
       <div v-else>
         <div style="margin-bottom:14px">
           <h4 style="margin:0 0 10px;font-size:14px">预计消耗资源</h4>
-          <div class="est-res-grid">
-            <div class="est-res-item">
-              <div class="est-res-label">CPU</div>
-              <div class="est-res-bar"><el-progress :percentage="parseFloat(estimateResult.cpuLimit)?Math.round(parseFloat(estimateResult.cpuRequest)/parseFloat(estimateResult.cpuLimit)*100):0" :stroke-width="16" :format="()=>'请求 '+estimateResult.cpuRequest" /></div>
-              <div class="est-res-sub">上限 {{ estimateResult.cpuLimit }} 核</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+            <div style="background:#f5f7fa;padding:10px 14px;border-radius:8px;text-align:center">
+              <div style="color:#909399;font-size:12px;margin-bottom:4px">CPU请求</div>
+              <div style="font-size:18px;font-weight:700;color:#409eff">{{ parseCpuToCores(estimateResult.cpuRequest).toFixed(2) }} 核</div>
+              <div style="color:#909399;font-size:11px">上限 {{ parseCpuToCores(estimateResult.cpuLimit).toFixed(1) }} 核</div>
             </div>
-            <div class="est-res-item">
-              <div class="est-res-label">内存</div>
-              <div class="est-res-bar"><el-progress :percentage="parseMemToNum(estimateResult.memLimit)?Math.round(parseMemToNum(estimateResult.memRequest)/parseMemToNum(estimateResult.memLimit)*100):0" :stroke-width="16" color="#67c23a" :format="()=>'请求 '+estimateResult.memRequest" /></div>
-              <div class="est-res-sub">上限 {{ estimateResult.memLimit }}</div>
+            <div style="background:#f5f7fa;padding:10px 14px;border-radius:8px;text-align:center">
+              <div style="color:#909399;font-size:12px;margin-bottom:4px">内存请求</div>
+              <div style="font-size:18px;font-weight:700;color:#67c23a">{{ (parseMemToNum(estimateResult.memRequest)/1024).toFixed(2) }} GB</div>
+              <div style="color:#909399;font-size:11px">上限 {{ (parseMemToNum(estimateResult.memLimit)/1024).toFixed(1) }} GB</div>
             </div>
-          </div>
-          <div style="margin-top:8px;background:#f0f9eb;padding:8px 12px;border-radius:6px;text-align:center">
-            <span style="color:#67c23a;font-size:12px">加权资源消耗</span>
-            <div style="font-size:20px;font-weight:700;color:#409eff">{{ estimateWeightedCost }}</div>
-            <div style="font-size:11px;color:#909399">CPU×10 + 内存(GB)×5</div>
+            <div style="background:#f0f9eb;padding:10px 14px;border-radius:8px;text-align:center">
+              <div style="color:#67c23a;font-size:12px;margin-bottom:4px">加权资源消耗</div>
+              <div style="font-size:18px;font-weight:700;color:#e6a23c">{{ estimateWeightedCost }}</div>
+              <div style="color:#909399;font-size:11px">CPU核×10 + 内存GB×5</div>
+            </div>
           </div>
         </div>
         <div v-if="estimateResult.nodeName || estimateResult.autoSelectedNode" style="margin-bottom:12px">
@@ -572,6 +579,8 @@ const clusterNodes=ref([]),clusterOverview=reactive({totalNodes:0,readyNodes:0,g
 const nodeLogs=ref([])
 const nodeDetailMap=ref({})
 const systemPods=ref([]),systemPodsLoading=ref(false)
+const systemSearch=reactive({name:'',type:'',node:''})
+const systemSort=reactive({field:'',order:'asc'})
 const runsResultVisible=ref(false),runsResultLoading=ref(false),runsResultData=ref({}),runsResultTitle=ref(''),runsResultCurrentRecord=ref(''),runsResultCurrentType=ref('')
 const runsFileVisible=ref(false),runsFileTitle=ref(''),runsFileContent=ref('')
 const modelList=ref([])
@@ -586,6 +595,9 @@ const totalMemRemainingGB=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.s
 const systemTotalCpu=computed(()=>systemPods.value.reduce((sum,p)=>sum+(p.cpuRequest||0),0))
 const systemTotalMem=computed(()=>systemPods.value.reduce((sum,p)=>sum+(p.memRequestMB||0),0))
 const systemPodsByNode=computed(()=>{const map={};systemPods.value.forEach(p=>{const n=p.nodeName||'-';if(!map[n])map[n]={nodeName:n,pods:[],cpuRequest:0,memRequestMB:0,types:new Set()};map[n].pods.push(p);map[n].cpuRequest+=p.cpuRequest||0;map[n].memRequestMB+=p.memRequestMB||0;if(p.serviceType)map[n].types.add(p.serviceType)});return Object.values(map).map(nd=>({...nd,types:[...nd.types]}))})
+const systemTypeOptions=computed(()=>[...new Set(systemPods.value.map(p=>p.serviceType).filter(Boolean))])
+const systemNodeOptions=computed(()=>[...new Set(systemPods.value.map(p=>p.nodeName).filter(Boolean))])
+const filteredSystemPods=computed(()=>{let list=[...systemPods.value];if(systemSearch.name){const kw=systemSearch.name.toLowerCase();list=list.filter(p=>p.podName&&p.podName.toLowerCase().includes(kw))}if(systemSearch.type){list=list.filter(p=>p.serviceType===systemSearch.type)}if(systemSearch.node){list=list.filter(p=>p.nodeName===systemSearch.node)}if(systemSort.field==='cpu'){list.sort((a,b)=>systemSort.order==='asc'?(a.cpuRequest||0)-(b.cpuRequest||0):(b.cpuRequest||0)-(a.cpuRequest||0))}else if(systemSort.field==='mem'){list.sort((a,b)=>systemSort.order==='asc'?(a.memRequestMB||0)-(b.memRequestMB||0):(b.memRequestMB||0)-(a.memRequestMB||0))}return list})
 const workerNodesOnly=computed(()=>clusterNodes.value.filter(n=>!n.roles?.includes('control-plane')&&!n.roles?.includes('master')))
 
 const wsConnections=new Map()
@@ -656,7 +668,8 @@ const estimateResult=ref({})
 const estimateDialogVisible=ref(false)
 const estimateLoading=ref(false)
 const estimateCallback=ref(null)
-const estimateWeightedCost=computed(()=>{const r=estimateResult.value;if(!r.cpuRequest)return '0';const cpuCores=parseFloat(r.cpuRequest)||0;const memGB=parseMemToNum(r.memRequest)/1024;return (cpuCores*10+memGB*5).toFixed(1)})
+const parseCpuToCores=v=>{if(!v)return 0;const s=String(v).trim();if(s.endsWith('m'))return parseFloat(s)/1000;return parseFloat(s)||0}
+const estimateWeightedCost=computed(()=>{const r=estimateResult.value;if(!r.cpuRequest)return '0';const cpuCores=parseCpuToCores(r.cpuRequest);const memGB=parseMemToNum(r.memRequest)/1024;return (cpuCores*10+memGB*5).toFixed(1)})
 const parseMemToNum=v=>{if(!v)return 0;const s=String(v).trim();const m=s.match(/^(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti|K|M|G)?$/i);if(m){const num=parseFloat(m[1]);const unit=(m[2]||'').toUpperCase();if(unit==='KI')return num/1024;if(unit==='MI')return num;if(unit==='GI')return num*1024;if(unit==='K')return num/1000;if(unit==='M')return num;if(unit==='G')return num*1000;return num}return parseFloat(s)||0}
 
 const showEstimateDialog=async(dataName,epochs,imgsz,targetNode,callback)=>{estimateLoading.value=true;estimateDialogVisible.value=true;estimateCallback.value=callback;try{const req={dataName,epochs,imgsz};if(targetNode)req.targetNode=targetNode;const r=await api.value.post('/api/scheduler/estimate',req);estimateResult.value=r.data}catch(e){estimateResult.value={error:e.response?.data?.message||'预估失败'}}finally{estimateLoading.value=false}}
@@ -715,6 +728,7 @@ const getStatusText=(s,t)=>{const p=t==='train'?'训练':'测试';if(s==='RUNNIN
 const formatMemory=v=>{if(!v)return'-';const s=String(v).trim();let bytes=0;const m=s.match(/^(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti|Pi|Ei|K|M|G|T|P|E)?$/i);if(m){const num=parseFloat(m[1]);const unit=(m[2]||'').toUpperCase();const units={KI:1024,MI:1024*1024,GI:1024*1024*1024,TI:1024*1024*1024*1024,PI:1024*1024*1024*1024*1024,EI:1024*1024*1024*1024*1024*1024,K:1000,M:1000*1000,G:1000*1000*1000,T:1000*1000*1000*1000,P:1000*1000*1000*1000*1000,E:1000*1000*1000*1000*1000*1000};bytes=num*(units[unit]||1)}else{const n=parseInt(s);if(isNaN(n))return v;bytes=n}if(bytes>=1073741824)return(bytes/1073741824).toFixed(1)+'GB';if(bytes>=1048576)return(bytes/1048576).toFixed(0)+'MB';if(bytes>=1024)return(bytes/1024).toFixed(0)+'KB';return bytes+'B'}
 const formatMemoryMB=v=>{if(!v)return 0;const s=String(v).trim();const m=s.match(/^(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti|K|M|G)?$/i);if(m){const num=parseFloat(m[1]);const unit=(m[2]||'').toUpperCase();if(unit==='KI')return num/1024;if(unit==='MI')return num;if(unit==='GI')return num*1024;if(unit==='K')return num/1000;if(unit==='M')return num;if(unit==='G')return num*1000;return num}return parseFloat(s)||0}
 const formatStartTime=v=>{if(!v)return'-';try{const d=new Date(v);const now=new Date();const diff=Math.floor((now-d)/1000);if(diff<60)return diff+'秒前';if(diff<3600)return Math.floor(diff/60)+'分钟前';if(diff<86400)return Math.floor(diff/3600)+'小时前';return Math.floor(diff/86400)+'天前'}catch(e){return v}}
+const formatDuration=v=>{if(!v)return'-';try{const d=new Date(v);const now=new Date();let diff=Math.floor((now-d)/1000);if(diff<0)diff=0;const days=Math.floor(diff/86400);const hours=Math.floor((diff%86400)/3600);const mins=Math.floor((diff%3600)/60);const secs=diff%60;let parts=[];if(days>0)parts.push(days+'天');if(hours>0)parts.push(hours+'小时');if(mins>0)parts.push(mins+'分钟');if(parts.length===0)parts.push(secs+'秒');return parts.join('')}catch(e){return v}}
 const getServiceTypeLabel=t=>({nfs:'NFS存储',mysql:'MySQL数据库',backend:'后端服务',frontend:'前端服务',ingress:'Ingress网关',etcd:'etcd',dns:'CoreDNS','kube-apiserver':'API Server','kube-controller':'Controller','kube-scheduler':'Scheduler','kube-proxy':'kube-proxy',network:'网络插件','k8s-system':'K8s系统',other:'其他'}[t]||t)
 const getServiceTypeColor=t=>({nfs:'warning',mysql:'danger',backend:'primary',frontend:'success',ingress:'',etcd:'info',dns:'info','kube-apiserver':'danger','kube-controller':'warning','kube-scheduler':'warning','kube-proxy':'info',network:'info','k8s-system':'info',other:'info'}[t]||'info')
 const getCpuCoreCount=row=>{const v=row.cpuAllocatable||row.cpuCapacity||'4';const n=parseInt(v);return isNaN(n)?4:n}
