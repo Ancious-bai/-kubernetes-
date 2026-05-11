@@ -268,9 +268,11 @@ public class NodeManagementService {
 
         Map<String, String> labels = (Map<String, String>) clusterInfo.get("labels");
         if (labels != null) {
-            dbNode.setLabels(labels.entrySet().stream()
+            String labelsStr = labels.entrySet().stream()
+                    .filter(e -> e.getKey().startsWith("node-role.kubernetes.io/") || e.getKey().equals("kubernetes.io/role"))
                     .map(e -> e.getKey() + "=" + e.getValue())
-                    .collect(Collectors.joining(",")));
+                    .collect(Collectors.joining(","));
+            dbNode.setLabels(labelsStr);
         }
 
         dbNode.setLastHeartbeat(LocalDateTime.now());
