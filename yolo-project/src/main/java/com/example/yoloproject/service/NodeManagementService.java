@@ -246,7 +246,9 @@ public class NodeManagementService {
         }
 
         boolean k8sSchedulable = !Boolean.TRUE.equals(clusterInfo.get("unschedulable"));
-        dbNode.setSchedulable(k8sSchedulable);
+        boolean isControlPlane = dbNode.getRoles() != null &&
+                (dbNode.getRoles().contains("control-plane") || dbNode.getRoles().contains("master"));
+        dbNode.setSchedulable(k8sSchedulable && !isControlPlane);
 
         Map<String, String> capacity = (Map<String, String>) clusterInfo.get("capacity");
         if (capacity != null) {
