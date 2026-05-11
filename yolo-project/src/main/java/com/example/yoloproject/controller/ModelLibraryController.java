@@ -180,8 +180,10 @@ public class ModelLibraryController {
         if (!new File(imagesDir).exists()) {
             imagesDir = projectRoot + targetDataName;
         }
+        final String effectiveImagesDir = imagesDir;
 
         String predictDir = projectRoot + "runs/detect/" + model.getModelName() + "_predict_" + targetDataName;
+        final String effectivePredictName = model.getModelName() + "_predict_" + targetDataName;
 
         authService.logOperation(null, username, "PREDICT", model.getModelName(),
                 "使用模型 " + model.getModelName() + " 推理数据集 " + targetDataName);
@@ -190,7 +192,7 @@ public class ModelLibraryController {
             try {
                 ProcessBuilder pb = new ProcessBuilder(
                         "python3", "-c",
-                        "from ultralytics import YOLO; model = YOLO('" + modelPath + "'); results = model.predict(source='" + imagesDir + "', save=True, project='" + projectRoot + "runs/detect', name='" + model.getModelName() + "_predict_" + targetDataName + "', exist_ok=True)"
+                        "from ultralytics import YOLO; model = YOLO('" + modelPath + "'); results = model.predict(source='" + effectiveImagesDir + "', save=True, project='" + projectRoot + "runs/detect', name='" + effectivePredictName + "', exist_ok=True)"
                 );
                 pb.redirectErrorStream(true);
                 Process process = pb.start();
