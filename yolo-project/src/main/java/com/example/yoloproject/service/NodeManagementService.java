@@ -98,6 +98,21 @@ public class NodeManagementService {
                 setDefaultRemainingResources(node);
             }
         }
+
+        for (NodeInfo node : nodes) {
+            if (node.getRoles() == null || node.getRoles().isEmpty()) {
+                if (isMasterNode(node.getNodeName())) {
+                    node.setRoles("control-plane,master");
+                } else {
+                    node.setRoles("worker");
+                }
+            }
+            boolean isControlPlane = node.getRoles().contains("control-plane") || node.getRoles().contains("master");
+            if (isControlPlane) {
+                node.setSchedulable(false);
+            }
+        }
+
         return nodes;
     }
 
@@ -385,14 +400,43 @@ public class NodeManagementService {
         result.put("nodeName", node.getNodeName());
         result.put("ip", node.getNodeIp());
         result.put("ready", node.getReady());
-        result.put("roles", node.getRoles());
+
+        String roles = node.getRoles();
+        if ((roles == null || roles.isEmpty()) && k8sClientService.isReady()) {
+            try {
+                List<Map<String, Object>> nodeList = k8sClientService.getNodeInfoList();
+                for (Map<String, Object> ni : nodeList) {
+                    if (nodeName.equals(ni.get("name"))) {
+                        Object r = ni.get("roles");
+                        if (r instanceof List) {
+                            roles = String.join(",", (List<String>) r);
+                        } else if (r instanceof String) {
+                            roles = (String) r;
+                        }
+                        break;
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        if (roles == null || roles.isEmpty()) {
+            if (isMasterNode(nodeName)) {
+                roles = "control-plane,master";
+            } else {
+                roles = "worker";
+            }
+        }
+        result.put("roles", roles);
+
+        boolean isControlPlane = roles.contains("control-plane") || roles.contains("master");
+        boolean schedulable = Boolean.TRUE.equals(node.getSchedulable()) && !isControlPlane;
+        result.put("schedulable", schedulable);
+
         result.put("cpuCapacity", node.getCpuCapacity());
         result.put("cpuAllocatable", node.getCpuAllocatable());
         result.put("memoryCapacity", node.getMemoryCapacity());
         result.put("memoryAllocatable", node.getMemoryAllocatable());
         result.put("gpuCapacity", node.getGpuCapacity());
         result.put("gpuAllocatable", node.getGpuAllocatable());
-        result.put("schedulable", node.getSchedulable());
         result.put("lastHeartbeat", node.getLastHeartbeat());
 
         if (k8sClientService.isReady()) {
