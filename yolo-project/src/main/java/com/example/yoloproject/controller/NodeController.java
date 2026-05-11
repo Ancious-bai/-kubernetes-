@@ -32,6 +32,9 @@ public class NodeController {
     @Autowired
     private YoloService yoloService;
 
+    @Autowired
+    private com.example.yoloproject.service.K8sClientService k8sClientService;
+
     @GetMapping
     public ResponseEntity<List<NodeInfo>> listNodes(HttpServletRequest httpRequest) {
         String role = (String) httpRequest.getAttribute("role");
@@ -212,6 +215,15 @@ public class NodeController {
             response.put("status", "no_available_node");
         }
         return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/system-pods")
+    public ResponseEntity<List<Map<String, Object>>> getSystemPods(HttpServletRequest httpRequest) {
+        String role = (String) httpRequest.getAttribute("role");
+        if (!"ROOT".equals(role) && !"ADMIN".equals(role)) {
+            return ResponseEntity.status(403).build();
+        }
+        return ResponseEntity.ok(k8sClientService.getSystemPods());
     }
 
     @GetMapping("/logs")

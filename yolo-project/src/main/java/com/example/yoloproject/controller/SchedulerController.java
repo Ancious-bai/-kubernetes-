@@ -149,10 +149,18 @@ public class SchedulerController {
         String username = (String) httpRequest.getAttribute("username");
 
         String targetNode = (String) request.get("targetNode");
-        Map<String, String> nodeSelector = (Map<String, String>) request.get("nodeSelector");
-        Map<String, String> gpuResources = (Map<String, String>) request.get("gpuResources");
+        @SuppressWarnings("unchecked")
+        Map<String, String> nodeSelector = request.get("nodeSelector") != null ? (Map<String, String>) request.get("nodeSelector") : null;
+        @SuppressWarnings("unchecked")
+        Map<String, String> gpuResources = request.get("gpuResources") != null ? (Map<String, String>) request.get("gpuResources") : null;
 
         Map<String, String> response = new HashMap<>();
+
+        if (dataName == null || dataName.isEmpty()) {
+            response.put("message", "数据集名称不能为空");
+            response.put("status", "error");
+            return ResponseEntity.badRequest().body(response);
+        }
 
         try {
             schedulerService.addTask(dataName, epochs, imgsz, username,
@@ -170,6 +178,10 @@ public class SchedulerController {
             response.put("message", e.getMessage());
             response.put("status", "error");
             return ResponseEntity.badRequest().body(response);
+        } catch (Exception e) {
+            response.put("message", "加入队列失败: " + e.getMessage());
+            response.put("status", "error");
+            return ResponseEntity.status(500).body(response);
         }
     }
 

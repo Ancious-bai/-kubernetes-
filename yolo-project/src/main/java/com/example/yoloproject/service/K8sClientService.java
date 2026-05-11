@@ -404,6 +404,124 @@ public class K8sClientService {
         return result;
     }
 
+    public List<Map<String, Object>> getSystemPods() {
+        List<Map<String, Object>> result = new ArrayList<>();
+        try {
+            V1PodList pods = coreApi.listPodForAllNamespaces()
+                    .execute();
+
+            if (pods != null && pods.getItems() != null) {
+                for (V1Pod pod : pods.getItems()) {
+                    Map<String, String> labels = pod.getMetadata().getLabels();
+                    if (labels == null) continue;
+
+                    boolean isSystemPod = false;
+                    String serviceType = "other";
+                    String serviceName = pod.getMetadata().getName();
+
+                    String appLabel = labels.getOrDefault("app", "");
+                    String appK8sIo = labels.getOrDefault("app.kubernetes.io/name", "");
+                    String component = labels.getOrDefault("component", "");
+                    String k8sApp = labels.getOrDefault("k8s-app", "");
+                    String nameLabel = labels.getOrDefault("name", "");
+
+                    String ns = pod.getMetadata().getNamespace();
+
+                    if ("yolo-training".equals(appLabel)) continue;
+
+                    if (ns != null && ns.equals("kube-system")) {
+                        isSystemPod = true;
+                        serviceType = "k8s-system";
+                    } else if (appLabel.contains("nfs") || nameLabel.contains("nfs") || serviceName.contains("nfs")) {
+                        isSystemPod = true;
+                        serviceType = "nfs";
+                    } else if (appLabel.contains("mysql") || nameLabel.contains("mysql") || serviceName.contains("mysql")) {
+                        isSystemPod = true;
+                        serviceType = "mysql";
+                    } else if (appLabel.contains("yolo") || appLabel.contains("backend") || nameLabel.contains("yolo") || serviceName.contains("yolo")) {
+                        isSystemPod = true;
+                        serviceType = "backend";
+                    } else if (appLabel.contains("frontend") || nameLabel.contains("frontend") || serviceName.contains("frontend")) {
+                        isSystemPod = true;
+                        serviceType = "frontend";
+                    } else if (appLabel.contains("ingress") || nameLabel.contains("ingress") || k8sApp.contains("ingress")) {
+                        isSystemPod = true;
+                        serviceType = "ingress";
+                    } else if (component.contains("etcd") || k8sApp.contains("etcd")) {
+                        isSystemPod = true;
+                        serviceType = "etcd";
+                    } else if (component.contains("kube-apiserver") || k8sApp.contains("kube-apiserver")) {
+                        isSystemPod = true;
+                        serviceType = "kube-apiserver";
+                    } else if (component.contains("kube-controller") || k8sApp.contains("kube-controller")) {
+                        isSystemPod = true;
+                        serviceType = "kube-controller";
+                    } else if (component.contains("kube-scheduler") || k8sApp.contains("kube-scheduler")) {
+                        isSystemPod = true;
+                        serviceType = "kube-scheduler";
+                    } else if (k8sApp.contains("kube-proxy") || nameLabel.contains("kube-proxy")) {
+                        isSystemPod = true;
+                        serviceType = "kube-proxy";
+                    } else if (k8sApp.contains("calico") || nameLabel.contains("calico") || nameLabel.contains("kube-flannel")) {
+                        isSystemPod = true;
+                        serviceType = "network";
+                    } else if (k8sApp.contains("coredns") || nameLabel.contains("coredns")) {
+                        isSystemPod = true;
+                        serviceType = "dns";
+                    }
+
+                    if (!isSystemPod && ns != null && !ns.equals("default")) continue;
+                    if (!isSystemPod) continue;
+
+                    Map<String, Object> podInfo = new HashMap<>();
+                    podInfo.put("podName", serviceName);
+                    podInfo.put("namespace", ns);
+                    podInfo.put("serviceType", serviceType);
+                    podInfo.put("phase", pod.getStatus() != null ? pod.getStatus().getPhase() : "Unknown");
+                    podInfo.put("nodeName", pod.getSpec() != null && pod.getSpec().getNodeName() != null ? pod.getSpec().getNodeName() : "-");
+                    podInfo.put("startTime", pod.getStatus() != null && pod.getStatus().getStartTime() != null ? pod.getStatus().getStartTime().toString() : null);
+
+                    double cpuRequest = 0, cpuLimit = 0, memRequestMB = 0, memLimitMB = 0;
+                    if (pod.getSpec() != null && pod.getSpec().getContainers() != null) {
+                        for (V1Container container : pod.getSpec().getContainers()) {
+                            if (container.getResources() != null) {
+                                if (container.getResources().getRequests() != null) {
+                                    for (Map.Entry<String, Quantity> entry : container.getResources().getRequests().entrySet()) {
+                                        if ("cpu".equals(entry.getKey())) cpuRequest += parseCpu(entry.getValue().toSuffixedString());
+                                        else if ("memory".equals(entry.getKey())) memRequestMB += parseMemory(entry.getValue().toSuffixedString());
+                                    }
+                                }
+                                if (container.getResources().getLimits() != null) {
+                                    for (Map.Entry<String, Quantity> entry : container.getResources().getLimits().entrySet()) {
+                                        if ("cpu".equals(entry.getKey())) cpuLimit += parseCpu(entry.getValue().toSuffixedString());
+                                        else if ("memory".equals(entry.getKey())) memLimitMB += parseMemory(entry.getValue().toSuffixedString());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    podInfo.put("cpuRequest", cpuRequest);
+                    podInfo.put("cpuLimit", cpuLimit);
+                    podInfo.put("memRequestMB", memRequestMB);
+                    podInfo.put("memLimitMB", memLimitMB);
+
+                    int restarts = 0;
+                    if (pod.getStatus() != null && pod.getStatus().getContainerStatuses() != null) {
+                        for (var cs : pod.getStatus().getContainerStatuses()) {
+                            restarts += cs.getRestartCount();
+                        }
+                    }
+                    podInfo.put("restarts", restarts);
+
+                    result.add(podInfo);
+                }
+            }
+        } catch (ApiException e) {
+            log.error("Failed to get system pods: {}", e.getMessage());
+        }
+        return result;
+    }
+
     public Map<String, Object> getNodeAllocatedResources(String nodeName) {
         Map<String, Object> result = new HashMap<>();
         try {
