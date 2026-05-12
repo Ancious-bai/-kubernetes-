@@ -45,6 +45,7 @@ def main():
     parser.add_argument('--source', required=True)
     parser.add_argument('--name', default=None)
     parser.add_argument('--imgsz', type=int, default=640)
+    parser.add_argument('--conf', type=float, default=0.05, help='置信度阈值(默认0.05)')
     args = parser.parse_args()
 
     data_root = os.environ.get('DATA_ROOT', '/app/data')
@@ -84,8 +85,10 @@ def main():
 
     output_name = args.name or (os.path.basename(model_path).replace('.pt', '') + "_predict")
     print(f"[PREDICT] Output name: {output_name}")
+    print(f"[PREDICT] Confidence threshold: {args.conf}")
 
     model = YOLO(model_path)
+    print(f"[PREDICT] Model classes: {model.names}")
 
     has_top_level_images = any(
         f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp'))
@@ -96,40 +99,50 @@ def main():
 
     print(f"[PREDICT] Starting prediction on {len(all_images)} images...")
 
+    total_detections = 0
+    predict_kwargs = dict(
+        imgsz=args.imgsz,
+        save=True,
+        save_txt=True,
+        save_conf=True,
+        project=project_dir,
+        name=output_name,
+        exist_ok=True,
+        conf=args.conf,
+        iou=0.45,
+    )
+
     if has_top_level_images:
         print(f"[PREDICT] Using directory mode (images found at top level)")
-        results = model.predict(
-            source=images_dir,
-            imgsz=args.imgsz,
-            save=True,
-            project=project_dir,
-            name=output_name,
-            exist_ok=True,
-            conf=0.25,
-            iou=0.45,
-            verbose=True,
-        )
+        results = model.predict(source=images_dir, verbose=True, **predict_kwargs)
+        for r in results:
+            n = len(r.boxes) if r.boxes is not None else 0
+            total_detections += n
+            if n > 0:
+                print(f"  {os.path.basename(r.path)}: {n} detections")
     else:
         print(f"[PREDICT] Using list mode (images in subdirectories)")
         batch_size = min(len(all_images), 16)
         for i in range(0, len(all_images), batch_size):
             batch = all_images[i:i + batch_size]
-            print(f"[PREDICT] Processing batch {i // batch_size + 1}/{(len(all_images) + batch_size - 1) // batch_size} ({len(batch)} images)")
+            batch_num = i // batch_size + 1
+            total_batches = (len(all_images) + batch_size - 1) // batch_size
+            print(f"[PREDICT] Processing batch {batch_num}/{total_batches} ({len(batch)} images)")
             try:
-                results = model.predict(
-                    source=batch,
-                    imgsz=args.imgsz,
-                    save=True,
-                    project=project_dir,
-                    name=output_name,
-                    exist_ok=True,
-                    conf=0.25,
-                    iou=0.45,
-                    verbose=False,
-                )
+                results = model.predict(source=batch, verbose=False, **predict_kwargs)
+                for r in results:
+                    n = len(r.boxes) if r.boxes is not None else 0
+                    total_detections += n
+                    if n > 0:
+                        print(f"  {os.path.basename(r.path)}: {n} detections")
             except Exception as e:
-                print(f"[WARNING] Batch failed: {e}")
+                print(f"[WARNING] Batch {batch_num} failed: {e}")
                 continue
+
+    print(f"[PREDICT] Total detections: {total_detections}")
+
+    if total_detections == 0:
+        print("[WARNING] No objects detected! Try lowering --conf threshold (current: {})".format(args.conf))
 
     output_dir = os.path.join(project_dir, output_name)
     result_count = 0
@@ -137,6 +150,11 @@ def main():
         result_images = [f for f in collect_all_images(output_dir) if 'labels' not in f]
         result_count = len(result_images)
         print(f"[PREDICT] Generated {result_count} prediction images")
+
+        labels_dir = os.path.join(output_dir, 'labels')
+        if os.path.exists(labels_dir):
+            label_files = [f for f in os.listdir(labels_dir) if f.endswith('.txt')]
+            print(f"[PREDICT] Generated {len(label_files)} label files (detection results in YOLO format)")
     else:
         print(f"[WARNING] Output directory not created: {output_dir}")
 

@@ -181,6 +181,11 @@
             </table>
           </div>
         </el-card>
+        <div class="logs-section" v-if="Object.keys(predictLogs).length">
+          <el-card shadow="hover"><template #header><span class="card-title">推理日志</span></template>
+            <div class="log-grid"><div v-for="(log,key) in predictLogs" :key="'predict-'+key" class="log-item"><div class="log-header"><el-tag size="small" type="info">{{ key }}</el-tag><el-button type="danger" size="small" link @click="closePredictLog(key)">关闭</el-button></div><div class="log-container" :ref="el=>setLogRef(key,'predict',el)"><pre class="log-content">{{ log }}</pre></div></div></div>
+          </el-card>
+        </div>
       </div>
 
       <div v-show="activePage==='logs'" class="page-logs">
@@ -498,14 +503,6 @@
       <template #footer><el-button type="primary" @click="confirmSaveModel" :loading="saveModelLoading">保存到模型库</el-button></template>
     </el-dialog>
 
-    <el-dialog :title="'推理日志 - ' + currentInferenceLogTitle" v-model="inferenceLogVisible" width="900px" :close-on-click-modal="false">
-      <div style="border:1px solid #ebeef5;border-radius:6px;background:#fafafa;max-height:500px;overflow:auto">
-        <pre v-if="inferenceLogContent" style="margin:0;padding:12px;font-size:11px;white-space:pre-wrap;font-family:'Cascadia Code','Fira Code','Consolas',monospace;line-height:1.5;color:#303133">{{ inferenceLogContent }}</pre>
-        <div v-else style="text-align:center;padding:30px;color:#909399"><el-icon class="is-loading" size="20"><Loading /></el-icon><p>加载日志中...</p></div>
-      </div>
-      <template #footer><el-button @click="inferenceLogVisible=false">关闭</el-button></template>
-    </el-dialog>
-
     <el-dialog :title="'推理结果 - ' + currentInferenceResultTitle" v-model="inferenceResultVisible" width="900px" :close-on-click-modal="false">
       <div style="display:flex;gap:8px;margin-bottom:14px">
         <el-button size="small" :type="inferenceResultTab==='result'?'primary':'default'" @click="inferenceResultTab='result';loadInferenceResultDetail()">推理结果</el-button>
@@ -688,7 +685,7 @@ const currentStep=ref(''),datasetList=ref([]),deleteConfirmVisible=ref(false),cl
 const deleteRecordConfirmVisible=ref(false),recordToDelete=ref('')
 const processingStatus=ref({}),testLoadingStatus=ref({}),trainingRecords=ref([]),userList=ref([]),operationLogs=ref([]),showAddUserDialog=ref(false)
 const newUserForm=reactive({username:'',password:'',role:'USER'})
-const pendingRecords=ref({}),preprocessLogs=ref({}),trainLogs=ref({}),testLogs=ref({})
+const pendingRecords=ref({}),preprocessLogs=ref({}),trainLogs=ref({}),testLogs=ref({}),predictLogs=ref({})
 const logRefs=ref({})
 const saveModelDialogVisible=ref(false),saveModelForm=reactive({dataName:'',modelType:'best',savePath:'',recordName:''}),saveModelLoading=ref(false)
 const deleteUserConfirmVisible=ref(false),userToDelete=ref({})
@@ -717,10 +714,9 @@ const inferenceFilter=reactive({modelName:'',dataName:''})
 const predictDialogVisible=ref(false),predictForm=reactive({modelId:null,modelName:'',dataName:''}),predictLoading=ref(false)
 const predictResultVisible=ref(false),predictResultTab=ref('log'),predictLogContent=ref(''),predictResultDetailData=ref({}),predictResultDetailLoading=ref(false),predictResultImages=ref([]),predictResultModelId=ref(null),predictResultDataName=ref('')
 const viewPredictImagesVisible=ref(false),viewPredictImagesList=ref([]),viewPredictImagesModelId=ref(null),viewPredictImagesDataName=ref('')
-const inferenceLogVisible=ref(false),inferenceLogContent=ref(''),currentInferenceLogTitle=ref('')
 const inferenceResultVisible=ref(false),inferenceResultTab=ref('result'),inferenceResultDetailData=ref({}),inferenceResultDetailLoading=ref(false),inferenceResultImages=ref([])
 const currentInferenceResultModelId=ref(null),currentInferenceResultDataName=ref(''),currentInferenceResultTitle=ref('')
-let inferenceLogPollTimer=null
+let predictLogPollTimer=null
 const showDistributedTrainDialog=ref(false),distributedTrainForm=reactive({dataName:'',epochs:2,imgsz:640,targetNode:'',gpuType:'',gpuCount:1})
 const schedulableNodes=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable))
 const totalMaxConcurrent=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable).reduce((sum,n)=>sum+(n.maxConcurrentTasks||1),0))
@@ -736,7 +732,7 @@ const filteredSystemPods=computed(()=>{let list=[...systemPods.value];if(systemS
 const workerNodesOnly=computed(()=>clusterNodes.value.filter(n=>!n.roles?.includes('control-plane')&&!n.roles?.includes('master')))
 
 const wsConnections=new Map()
-let statusRefreshTimer=null
+let statusRefreshTimer=null, inferenceStatusTimer=null
 
 const isAdmin=computed(()=>currentUser.role==='ROOT'||currentUser.role==='ADMIN')
 const pagedDatasets=computed(()=>{const s=(currentPage.value-1)*pageSize.value;return datasetList.value.slice(s,s+pageSize.value)})
@@ -777,7 +773,7 @@ const confirmDistributedTrain=async()=>{const req={dataName:distributedTrainForm
 
 const handleLogin=async()=>{if(loginLoading.value)return;loginLoading.value=true;loginError.value='';try{const r=await axios.post('/api/auth/login',loginForm);token.value=r.data.token;currentUser.username=r.data.username;currentUser.role=r.data.role;isLoggedIn.value=true;localStorage.setItem('token',token.value);localStorage.setItem('username',currentUser.username);localStorage.setItem('role',currentUser.role);onLoginSuccess()}catch(e){loginError.value=e.response?.data?.message||'登录失败'}finally{loginLoading.value=false}}
 
-const handleLogout=()=>{token.value='';currentUser.username='';currentUser.role='';isLoggedIn.value=false;localStorage.removeItem('token');localStorage.removeItem('username');localStorage.removeItem('role');stopAllWs();stopStatusRefresh();stopAllPreprocessTimers();datasetList.value=[];trainingRecords.value=[];userList.value=[];operationLogs.value=[];Object.keys(pendingRecords.value).forEach(k=>delete pendingRecords.value[k]);Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k]);Object.keys(processingStatus.value).forEach(k=>delete processingStatus.value[k]);Object.keys(testLoadingStatus.value).forEach(k=>delete testLoadingStatus.value[k]);currentPage.value=1;total.value=0;activePage.value='main'}
+const handleLogout=()=>{token.value='';currentUser.username='';currentUser.role='';isLoggedIn.value=false;localStorage.removeItem('token');localStorage.removeItem('username');localStorage.removeItem('role');stopAllWs();stopStatusRefresh();stopInferenceStatusRefresh();stopAllPreprocessTimers();datasetList.value=[];trainingRecords.value=[];userList.value=[];operationLogs.value=[];Object.keys(pendingRecords.value).forEach(k=>delete pendingRecords.value[k]);Object.keys(preprocessLogs.value).forEach(k=>delete preprocessLogs.value[k]);Object.keys(trainLogs.value).forEach(k=>delete trainLogs.value[k]);Object.keys(testLogs.value).forEach(k=>delete testLogs.value[k]);Object.keys(predictLogs.value).forEach(k=>delete predictLogs.value[k]);Object.keys(processingStatus.value).forEach(k=>delete processingStatus.value[k]);Object.keys(testLoadingStatus.value).forEach(k=>delete testLoadingStatus.value[k]);oldInferenceRecords=[];inferenceList.value=[];if(predictLogPollTimer){clearInterval(predictLogPollTimer);predictLogPollTimer=null}currentPage.value=1;total.value=0;activePage.value='main'}
 
 const onLoginSuccess=async()=>{try{await Promise.all([refreshDatasets(),loadTrainingRecords(),loadOperationLogs(),loadClusterNodes(),loadModelList()]);if(isAdmin.value)await loadUsers();const r=await api.value.get('/api/scheduler/config');if(r.data){defaultEpochs.value=r.data.defaultEpochs;savedDefaultEpochs.value=r.data.defaultEpochs;defaultImgsz.value=r.data.defaultImgsz;savedDefaultImgsz.value=r.data.defaultImgsz;if(r.data.schedulingMode)schedulingMode.value=r.data.schedulingMode}startStatusRefresh()}catch(e){}}
 
@@ -827,6 +823,7 @@ const handleViewTestLog=async(rec)=>{const rn=rec.recordName;try{if(rec.testStat
 const closeTrainLog=n=>{delete trainLogs.value[n];closeWsConnection(n+'-train')}
 const closeTestLog=n=>{delete testLogs.value[n];closeWsConnection(n+'-test')}
 const closePreprocessLog=n=>{delete preprocessLogs.value[n]}
+const closePredictLog=key=>{delete predictLogs.value[key];if(Object.keys(predictLogs.value).length===0)stopInferenceStatusRefresh();if(predictLogPollTimer){clearInterval(predictLogPollTimer);predictLogPollTimer=null}}
 
 const closeWsConnection=key=>{try{const ws=wsConnections.get(key);if(ws){try{if(ws.readyState===WebSocket.OPEN||ws.readyState===WebSocket.CONNECTING)ws.close()}catch(e){}wsConnections.delete(key)}}catch(e){}}
 const stopAllWs=()=>{try{wsConnections.forEach(ws=>{try{if(ws.readyState===WebSocket.OPEN||ws.readyState===WebSocket.CONNECTING)ws.close()}catch(e){}});wsConnections.clear()}catch(e){}}
@@ -879,22 +876,26 @@ const loadRunsFile=async(recordName,type,path)=>{try{const r=await api.value.get
 const switchToModels=()=>{activePage.value='models';loadModelList();loadInferenceRecords()}
 const loadModelList=async()=>{try{const r=await api.value.get('/api/models');modelList.value=r.data}catch(e){}}
 const showPredictDialog=m=>{predictForm.modelId=m.id;predictForm.modelName=m.modelName;predictForm.dataName='';predictDialogVisible.value=true}
-const handlePredict=async()=>{if(!predictForm.dataName){showMsg('请选择目标数据集','warning');return}predictLoading.value=true;try{const r=await api.value.post(`/api/models/${predictForm.modelId}/predict`,{dataName:predictForm.dataName});if(r.data.status==='success'){showMsg('推理任务已提交');predictDialogVisible.value=false;loadInferenceRecords();setTimeout(()=>loadInferenceRecords(),3000);setTimeout(()=>loadInferenceRecords(),10000);predictResultModelId.value=predictForm.modelId;predictResultDataName.value=predictForm.dataName;predictResultVisible.value=true;predictResultTab.value='log';predictLogContent.value='';predictResultDetailData.value={};predictResultImages.value=[];loadPredictLog();pollPredictLog()}}catch(e){showMsg(e.response?.data?.message||'推理失败','error')}finally{predictLoading.value=false}}
-const loadPredictLog=async()=>{try{const r=await api.value.get(`/api/models/${predictResultModelId.value}/predict-log`,{params:{dataName:predictResultDataName.value}});predictLogContent.value=r.data.log||'暂无日志'}catch(e){predictLogContent.value='加载日志失败'}}
-const pollPredictLog=async()=>{const iv=setInterval(loadPredictLog,5000);setTimeout(()=>clearInterval(iv),600000)}
+const handlePredict=async()=>{if(!predictForm.dataName){showMsg('请选择目标数据集','warning');return}predictLoading.value=true;try{const r=await api.value.post(`/api/models/${predictForm.modelId}/predict`,{dataName:predictForm.dataName});if(r.data.status==='success'){showMsg('推理任务已提交');predictDialogVisible.value=false;const logKey=`${predictForm.modelName}_predict_${predictForm.dataName}`;predictLogs.value[logKey]='';connectPredictLog(predictForm.modelId,predictForm.dataName,logKey);startInferenceStatusRefresh()}}catch(e){showMsg(e.response?.data?.message||'推理失败','error')}finally{predictLoading.value=false}}
+let predictLogPollTimer=null
+const connectPredictLog=(modelId,dataName,logKey)=>{if(predictLogPollTimer)clearInterval(predictLogPollTimer);const loadOnce=async()=>{try{const r=await api.value.get(`/api/models/${modelId}/predict-log`,{params:{dataName}});if(r.data.log){predictLogs.value[logKey]=r.data.log;autoScroll(logKey,'predict')}}catch(e){}};loadOnce();predictLogPollTimer=setInterval(loadOnce,5000);setTimeout(()=>{if(predictLogPollTimer){clearInterval(predictLogPollTimer);predictLogPollTimer=null}},600000)}
+const startInferenceStatusRefresh=()=>{if(inferenceStatusTimer)return;inferenceStatusTimer=setInterval(async()=>{if(Object.keys(predictLogs.value).length===0&&!hasActiveInferenceTasks()){stopInferenceStatusRefresh();return}await checkInferenceStatusChanges()},3000)}
+const stopInferenceStatusRefresh=()=>{if(inferenceStatusTimer){clearInterval(inferenceStatusTimer);inferenceStatusTimer=null}}
+const hasActiveInferenceTasks=()=>inferenceList.value.some(i=>i.status==='running'||i.status==='running')
+let oldInferenceRecords=[]
+const checkInferenceStatusChanges=async()=>{try{const newRecords=(await api.value.get('/api/models/inferences')).data;for(const inf of newRecords){const oldInf=oldInferenceRecords.find(o=>o.id===inf.id);if(oldInf&&oldInf.status!==inf.status){if((oldInf.status==='running')&&(inf.status==='completed')){showMsg(`推理 ${inf.modelName}→${inf.dataName} 已完成`)}else if((oldInf.status==='running')&&(inf.status==='failed')){showMsg(`推理 ${inf.modelName}→${inf.dataName} 失败`,'error')}if(inf.status!=='running'){const logKey=`${inf.modelName}_predict_${inf.dataName}`;if(predictLogPollTimer){clearInterval(predictLogPollTimer);predictLogPollTimer=null}}}}oldInferenceRecords=newRecords;inferenceList.value=newRecords}catch(e){}}
 const loadPredictResultDetail=async()=>{if(Object.keys(predictResultDetailData.value).length)return;predictResultDetailLoading.value=true;try{const r=await api.value.get(`/api/models/${predictResultModelId.value}/predict-results`,{params:{dataName:predictResultDataName.value}});predictResultDetailData.value=r.data||{};predictResultImages.value=(r.data.files||[]).filter(f=>f.isImage&&!f.isDirectory)}catch(e){predictResultDetailData.value={exists:false}}finally{predictResultDetailLoading.value=false}}
 const getPredictImageUrl=path=>`/api/models/${predictResultModelId.value}/predict-image?dataName=${encodeURIComponent(predictResultDataName.value)}&imageName=&path=${encodeURIComponent(path)}&token=${token.value}`
 const openPredictImage=path=>{window.open(getPredictImageUrl(path),'_blank')}
 const handleDeleteModel=async m=>{try{await api.value.delete(`/api/models/${m.id}`);showMsg('模型已删除');loadModelList();loadInferenceRecords()}catch(e){showMsg(e.response?.data?.message||'删除失败','error')}}
-const loadInferenceRecords=async()=>{try{const params={};if(inferenceFilter.modelName)params.modelName=inferenceFilter.modelName;if(inferenceFilter.dataName)params.dataName=inferenceFilter.dataName;const r=await api.value.get('/api/models/inferences',{params});inferenceList.value=r.data}catch(e){}}
+const loadInferenceRecords=async()=>{try{const params={};if(inferenceFilter.modelName)params.modelName=inferenceFilter.modelName;if(inferenceFilter.dataName)params.dataName=inferenceFilter.dataName;const r=await api.value.get('/api/models/inferences',{params});inferenceList.value=r.data;if(oldInferenceRecords.length===0)oldInferenceRecords=[...r.data]}catch(e){}}
 const resetInferenceFilter=()=>{inferenceFilter.modelName='';inferenceFilter.dataName='';loadInferenceRecords()}
 const showPredictImages=async inf=>{viewInferenceResult(inf)}
 const getViewPredictImageUrl=name=>`/api/models/${viewPredictImagesModelId.value}/predict-image?dataName=${encodeURIComponent(viewPredictImagesDataName.value)}&imageName=${encodeURIComponent(name)}&token=${token.value}`
 const openViewPredictImage=name=>{window.open(getViewPredictImageUrl(name),'_blank')}
-const viewInferenceLog=async inf=>{currentInferenceLogTitle.value=`${inf.modelName} → ${inf.dataName}`;inferenceLogVisible.value=true;inferenceLogContent.value='';if(inferenceLogPollTimer)clearInterval(inferenceLogPollTimer);loadInferenceLog(inf.modelId,inf.dataName);if(inf.status==='running'||inf.status==='running'){inferenceLogPollTimer=setInterval(()=>loadInferenceLog(inf.modelId,inf.dataName),5000)}}
-const loadInferenceLog=async(modelId,dataName)=>{try{const r=await api.value.get(`/api/models/${modelId}/predict-log`,{params:{dataName}});if(r.data.log)inferenceLogContent.value=r.data.log}catch(e){}}
+const viewInferenceLog=async inf=>{const logKey=`${inf.modelName}_predict_${inf.dataName}`;if(!predictLogs.value[logKey]){predictLogs.value[logKey]=''}connectPredictLog(inf.modelId,inf.dataName,logKey)}
 const viewInferenceResult=async inf=>{currentInferenceResultTitle.value=`${inf.modelName} → ${inf.dataName}`;currentInferenceResultModelId.value=inf.modelId;currentInferenceResultDataName.value=inf.dataName;inferenceResultVisible=true;inferenceResultTab.value='result';inferenceResultDetailData.value={};inferenceResultDetailLoading.value=true;inferenceResultImages.value=[];loadInferenceResultDetail()}
-const loadInferenceResultDetail=async()=>{if(Object.keys(inferenceResultDetailData.value).length)return;inferenceResultDetailLoading.value=true;try{const r=await api.value.get(`/api/models/${currentInferenceResultModelId.value}/predict-results`,{params:{dataName:currentInferenceResultDataName.value}});inferenceResultDetailData.value=r.data||{};inferenceResultImages.value=(r.data.files||[]).filter(f=>f.isImage&&!f.isDirectory)}catch(e){inferenceResultDetailData.value={exists:false}}finally{inferenceResultDetailLoading.value=false}}
+const loadInferenceResultDetail=async()=>{inferenceResultDetailLoading.value=true;try{const r=await api.value.get(`/api/models/${currentInferenceResultModelId.value}/predict-results`,{params:{dataName:currentInferenceResultDataName.value}});inferenceResultDetailData.value=r.data||{};inferenceResultImages.value=(r.data.files||[]).filter(f=>f.isImage&&!f.isDirectory)}catch(e){inferenceResultDetailData.value={exists:false}}finally{inferenceResultDetailLoading.value=false}}
 const getInferenceResultImageUrl=path=>`/api/models/${currentInferenceResultModelId.value}/predict-image?dataName=${encodeURIComponent(currentInferenceResultDataName.value)}&imageName=&path=${encodeURIComponent(path)}&token=${token.value}`
 const openInferenceResultImage=path=>{window.open(getInferenceResultImageUrl(path),'_blank')}
 const handleDeleteInference=async inf=>{try{await api.value.delete(`/api/models/inferences/${inf.id}`);showMsg('推理记录已删除');loadInferenceRecords()}catch(e){showMsg(e.response?.data?.message||'删除失败','error')}}
