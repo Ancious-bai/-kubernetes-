@@ -189,14 +189,42 @@ public class ModelLibraryController {
         }
 
         try {
-            File file = new File(model.getModelPath());
-            if (file.exists()) file.delete();
+            String modelPath = model.getModelPath();
+            log.info("Deleting model file: {}", modelPath);
+            if (modelPath != null && !modelPath.isEmpty()) {
+                File file = new File(modelPath);
+                if (file.exists()) {
+                    if (file.delete()) {
+                        log.info("Model file deleted: {}", modelPath);
+                    } else {
+                        log.warn("Failed to delete model file (may be in use): {}", modelPath);
+                    }
+                } else {
+                    log.warn("Model file does not exist, skipping deletion: {}", modelPath);
+                }
+            }
         } catch (Exception e) {
+            log.warn("Exception while deleting model file: {}", e.getMessage());
         }
 
-        inferenceRecordRepository.findByModelId(id).forEach(inferenceRecordRepository::delete);
+        try {
+            inferenceRecordRepository.findByModelId(id).forEach(ir -> {
+                try { inferenceRecordRepository.delete(ir); } catch (Exception e) {
+                    log.warn("Failed to delete inference record {}: {}", ir.getId(), e.getMessage());
+                }
+            });
+        } catch (Exception e) {
+            log.warn("Exception while cleaning up inference records: {}", e.getMessage());
+        }
 
-        modelLibraryRepository.deleteById(id);
+        try {
+            modelLibraryRepository.deleteById(id);
+        } catch (Exception e) {
+            log.error("Failed to delete model from database: {}", e.getMessage(), e);
+            response.put("message", "删除失败: " + e.getMessage());
+            response.put("status", "error");
+            return ResponseEntity.status(500).body(response);
+        }
         authService.logOperation(null, username, "DELETE_MODEL", model.getModelName(),
                 "从模型库删除模型: " + model.getModelName());
 
@@ -311,19 +339,19 @@ public class ModelLibraryController {
             container.setImagePullPolicy("IfNotPresent");
             container.setWorkingDir("/app/workspace");
 
-            String modelPath = model.getModelPath().replace(projectRoot, "/app/data/");
-            String sourcePath = "/app/data/" + targetDataName + "/images";
-            String projectDir = "/app/data/runs/detect";
+            String modelPathRel = model.getModelPath().replace(projectRoot, "");
+            if (modelPathRel.startsWith("/")) modelPathRel = modelPathRel.substring(1);
 
             java.util.List<String> command = java.util.Arrays.asList(
-                    "python3", "-c",
-                    "from ultralytics import YOLO; import os; " +
-                    "src='" + sourcePath + "'; " +
-                    "if not os.path.exists(src): src='" + "/app/data/" + targetDataName + "'; " +
-                    "model=YOLO('" + modelPath + "'); " +
-                    "model.predict(source=src, save=True, project='" + projectDir + "', name='" + predictDirName + "', exist_ok=True)"
+                    "python3", "/app/workspace/predict_yolo.py",
+                    "--model", modelPathRel,
+                    "--source", targetDataName + "_processed",
+                    "--name", predictDirName,
+                    "--imgsz", "640"
             );
             container.setCommand(command);
+
+            log.info("Predict command: {}", command);
 
             io.kubernetes.client.openapi.models.V1EnvVar env1 = new io.kubernetes.client.openapi.models.V1EnvVar();
             env1.setName("PYTHONUNBUFFERED");

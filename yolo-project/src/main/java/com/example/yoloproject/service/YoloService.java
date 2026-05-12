@@ -841,10 +841,6 @@ public class YoloService {
             transactionTemplate.executeWithoutResult(status -> {
                 trainingRecordRepository.deleteByRecordName(recordName);
                 nodeLogRepository.findByRecordName(recordName).forEach(nodeLogRepository::delete);
-                modelLibraryRepository.findByRecordName(recordName).forEach(ml -> {
-                    try { new File(ml.getModelPath()).delete(); } catch (Exception e) {}
-                    modelLibraryRepository.delete(ml);
-                });
             });
         } catch (Exception e) {
             throw new IllegalStateException("Failed to delete training record: " + e.getMessage(), e);
