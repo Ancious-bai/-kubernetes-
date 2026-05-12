@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import os, shutil, sys, glob, json
-from pathlib import Path
 
 
 def setup_env():
@@ -31,6 +30,7 @@ setup_env()
 
 from ultralytics import YOLO
 import argparse
+from PIL import Image
 
 
 def collect_all_images(source_dir):
@@ -41,37 +41,32 @@ def collect_all_images(source_dir):
     return sorted(set(results))
 
 
-def save_labels_from_results(results, labels_dir, model_names):
+def save_labels_and_summary(results, output_dir, labels_dir, model_names, all_image_paths, conf_thresh, imgsz):
     os.makedirs(labels_dir, exist_ok=True)
     total_detections = 0
     class_counts = {}
     per_image_results = []
 
-    for r in results:
+    for idx, r in enumerate(results):
         img_path = getattr(r, 'path', '')
-        img_name = os.path.basename(img_path) if img_path else 'unknown'
-        img_stem = os.path.splitext(img_name)[0]
+        original_name = os.path.basename(img_path) if img_path else f'unknown_{idx}'
         n = len(r.boxes) if r.boxes is not None else 0
         total_detections += n
 
         image_info = {
-            'image': img_name,
+            'originalName': original_name,
             'detections': n,
             'boxes': []
         }
 
         if n > 0:
-            label_path = os.path.join(labels_dir, img_stem + '.txt')
+            label_path = os.path.join(labels_dir, original_name.rsplit('.', 1)[0] + '.txt')
             with open(label_path, 'w') as f:
                 for box in r.boxes:
                     cls_id = int(box.cls[0])
                     conf = float(box.conf[0])
                     xywhn = box.xywhn[0].tolist()
-                    x_center = xywhn[0]
-                    y_center = xywhn[1]
-                    width = xywhn[2]
-                    height = xywhn[3]
-                    f.write(f"{cls_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f} {conf:.6f}\n")
+                    f.write(f"{cls_id} {xywhn[0]:.6f} {xywhn[1]:.6f} {xywhn[2]:.6f} {xywhn[3]:.6f} {conf:.6f}\n")
 
                     cls_name = model_names.get(cls_id, str(cls_id))
                     class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
@@ -79,15 +74,118 @@ def save_labels_from_results(results, labels_dir, model_names):
                     x1, y1, x2, y2 = box.xyxy[0].tolist()
                     image_info['boxes'].append({
                         'class': cls_name,
-                        'class_id': cls_id,
+                        'classId': cls_id,
                         'confidence': round(conf, 4),
-                        'bbox_xyxy': [round(v, 2) for v in [x1, y1, x2, y2]],
-                        'bbox_xywhn': [round(v, 6) for v in xywhn]
+                        'bboxXyxy': [round(v, 2) for v in [x1, y1, x2, y2]],
+                        'bboxXywhn': [round(v, 6) for v in xywhn]
                     })
 
         per_image_results.append(image_info)
 
-    return total_detections, class_counts, per_image_results
+    summary = {
+        'totalImages': len(all_image_paths),
+        'totalDetections': total_detections,
+        'imagesWithDetections': sum(1 for p in per_image_results if p['detections'] > 0),
+        'imagesWithoutDetections': sum(1 for p in per_image_results if p['detections'] == 0),
+        'confidenceThreshold': conf_thresh,
+        'imageSize': imgsz,
+        'classCounts': class_counts,
+        'modelClasses': model_names,
+        'perImageResults': per_image_results
+    }
+
+    summary_path = os.path.join(output_dir, 'detection_summary.json')
+    with open(summary_path, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+
+    return total_detections, class_counts
+
+
+def save_annotated_images(results, output_dir):
+    annotated_dir = os.path.join(output_dir, 'annotated')
+    os.makedirs(annotated_dir, exist_ok=True)
+
+    saved_files = []
+    for idx, r in enumerate(results):
+        img_path = getattr(r, 'path', '')
+        original_name = os.path.basename(img_path) if img_path else f'unknown_{idx}.jpg'
+
+        try:
+            plotted = r.plot()
+            if plotted is not None:
+                img_array = plotted
+                from numpy import ndarray
+                if isinstance(img_array, ndarray):
+                    pil_img = Image.fromarray(img_array)
+                else:
+                    pil_img = Image.open(io.BytesIO(img_array))
+
+                safe_name = "".join(c if c.isalnum() or c in '-_.()' else '_' for c in original_name)
+                out_path = os.path.join(annotated_dir, safe_name)
+                pil_img.save(out_path)
+                saved_files.append({'savedName': safe_name, 'originalName': original_name})
+        except Exception as e:
+            print(f"[WARNING] Failed to plot image {original_name}: {e}")
+
+    return saved_files
+
+
+def create_prediction_grid(results, output_dir, cols=4):
+    try:
+        from numpy import array, zeros_like, uint8
+        from PIL import Image as PILImage
+
+        plotted_images = []
+        names = []
+
+        for r in results:
+            img_path = getattr(r, 'path', '')
+            name = os.path.basename(img_path) if img_path else '?'
+
+            try:
+                plotted = r.plot()
+                if plotted is not None:
+                    if isinstance(plotted, array):
+                        img = PILImage.fromarray(plotted)
+                    else:
+                        img = PILImage.open(io.BytesIO(plotted))
+                    plotted_images.append(img)
+                    names.append(name)
+            except Exception:
+                pass
+
+        if not plotted_images:
+            return None
+
+        n = len(plotted_images)
+        rows = (n + cols - 1) // cols
+
+        w, h = plotted_images[0].size
+        grid_w = w * cols + (cols - 1) * 4
+        grid_h = h * rows + (rows - 1) * 4
+
+        grid_img = PILImage.new('RGB', (grid_w, grid_h), color=(255, 255, 255))
+
+        for idx, (img, name) in enumerate(zip(plotted_images, names)):
+            row_idx = idx // cols
+            col_idx = idx % cols
+            x = col_idx * (w + 4)
+            y = row_idx * (h + 4)
+            grid_img.paste(img, (x, y))
+
+            short_name = name[:30] + ('...' if len(name) > 30 else '')
+
+        grid_path = os.path.join(output_dir, 'prediction_grid.jpg')
+        grid_img.save(grid_path, quality=95)
+        print(f"[PREDICT] Grid saved: {grid_path} ({cols}x{rows}, {n} images)")
+        return grid_path
+
+    except ImportError:
+        print("[WARNING] Cannot create grid: PIL/numpy not available")
+        return None
+    except Exception as e:
+        print(f"[WARNING] Grid creation failed: {e}")
+        return None
 
 
 def main():
@@ -126,12 +224,6 @@ def main():
 
     if len(all_images) == 0:
         print("[WARNING] No images found!")
-        if os.path.isdir(images_dir):
-            for item in os.listdir(images_dir):
-                full = os.path.join(images_dir, item)
-                if os.path.isdir(full):
-                    sub_images = collect_all_images(full)
-                    print(f"  {item}/: {len(sub_images)} images")
         sys.exit(1)
 
     output_name = args.name or (os.path.basename(model_path).replace('.pt', '') + "_predict")
@@ -145,54 +237,51 @@ def main():
     if os.path.exists(output_dir):
         print(f"[PREDICT] Cleaning existing output directory: {output_dir}")
         shutil.rmtree(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
     print(f"[PREDICT] Starting prediction on {len(all_images)} images...")
 
     predict_kwargs = dict(
         imgsz=args.imgsz,
-        save=True,
+        save=False,
         project=project_dir,
         name=output_name,
         exist_ok=True,
         conf=args.conf,
         iou=0.45,
+        verbose=True
     )
 
-    results = model.predict(source=all_images, verbose=True, **predict_kwargs)
+    results = model.predict(source=all_images, **predict_kwargs)
 
-    print(f"[PREDICT] Prediction done, saving labels and summary...")
+    print(f"[PREDICT] Prediction done ({len(results)} results). Plotting annotations...")
 
     labels_dir = os.path.join(output_dir, 'labels')
-    total_detections, class_counts, per_image_results = save_labels_from_results(
-        results, labels_dir, model.names
+
+    total_detections, class_counts = save_labels_and_summary(
+        results, output_dir, labels_dir, model.names, all_images, args.conf, args.imgsz
     )
 
-    summary = {
-        'total_images': len(all_images),
-        'total_detections': total_detections,
-        'class_counts': class_counts,
-        'confidence_threshold': args.conf,
-        'image_size': args.imgsz,
-        'model_path': args.model,
-        'model_classes': model.names,
-        'per_image_results': per_image_results
-    }
+    print(f"[PREDICT] Saving annotated images...")
+    saved_files = save_annotated_images(results, output_dir)
+    print(f"[PREDICT] Saved {len(saved_files)} annotated images to annotated/")
 
-    summary_path = os.path.join(output_dir, 'detection_summary.json')
-    with open(summary_path, 'w', encoding='utf-8') as f:
-        json.dump(summary, f, indent=2, ensure_ascii=False)
+    print(f"[PREDICT] Creating prediction grid...")
+    grid_path = create_prediction_grid(results, output_dir, cols=min(5, max(2, len(all_images))))
 
-    print(f"[PREDICT] Total detections: {total_detections} in {len(all_images)} images")
+    print(f"\n[PREDICT] === RESULT SUMMARY ===")
+    print(f"  Total images:     {len(all_images)}")
+    print(f"  Total detections: {total_detections}")
     if class_counts:
-        print(f"[PREDICT] Class breakdown:")
+        print(f"  Class breakdown:")
         for cls_name, count in sorted(class_counts.items(), key=lambda x: -x[1]):
-            print(f"  {cls_name}: {count}")
+            print(f"    {cls_name}: {count}")
     else:
-        print("[WARNING] No objects detected!")
-
-    label_files = [f for f in os.listdir(labels_dir) if f.endswith('.txt')] if os.path.exists(labels_dir) else []
-    print(f"[PREDICT] Label files: {len(label_files)}")
-    print(f"[PREDICT] Summary saved to: {summary_path}")
+        print("  No objects detected!")
+    print(f"  Confidence:       {args.conf}")
+    print(f"  Annotated images: {len(saved_files)}")
+    if grid_path:
+        print(f"  Grid image:       {grid_path}")
     print("PREDICTION_COMPLETE")
 
 

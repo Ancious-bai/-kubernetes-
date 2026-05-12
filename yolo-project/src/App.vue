@@ -503,31 +503,44 @@
       <template #footer><el-button type="primary" @click="confirmSaveModel" :loading="saveModelLoading">保存到模型库</el-button></template>
     </el-dialog>
 
-    <el-dialog :title="'推理结果 - ' + currentInferenceResultTitle" v-model="inferenceResultVisible" width="900px" :close-on-click-modal="false">
+    <el-dialog :title="'推理结果 - ' + currentInferenceResultTitle" v-model="inferenceResultVisible" width="1000px" :close-on-click-modal="false">
       <div v-if="inferenceResultDetailLoading" style="text-align:center;padding:30px"><el-icon class="is-loading" size="24"><Loading /></el-icon><p>加载中...</p></div>
       <div v-else-if="!inferenceResultDetailData.exists" style="text-align:center;padding:30px;color:#909399">结果目录不存在</div>
       <div v-else>
-        <div v-if="inferenceResultDetailData.detectionSummary" style="margin-bottom:16px;padding:14px;background:#f5f7fa;border-radius:8px">
-          <h4 style="margin:0 0 10px;font-size:14px;color:#303133">检测摘要</h4>
-          <div style="display:flex;gap:20px;flex-wrap:wrap">
-            <div style="text-align:center"><div style="font-size:24px;font-weight:700;color:#409eff">{{ inferenceResultDetailData.detectionSummary.totalImages || 0 }}</div><div style="font-size:12px;color:#909399">推理图片数</div></div>
-            <div style="text-align:center"><div style="font-size:24px;font-weight:700;color:#67c23a">{{ inferenceResultDetailData.detectionSummary.totalDetections || 0 }}</div><div style="font-size:12px;color:#909399">检测目标数</div></div>
-            <div style="text-align:center"><div style="font-size:24px;font-weight:700;color:#e6a23c">{{ inferenceResultDetailData.detectionSummary.confidenceThreshold || '-' }}</div><div style="font-size:12px;color:#909399">置信度阈值</div></div>
+        <div v-if="inferenceResultDetailData.detectionSummary" style="margin-bottom:16px;padding:14px 16px;background:#f5f7fa;border-radius:8px;border-left:4px solid #409eff">
+          <h4 style="margin:0 0 12px;font-size:14px;color:#303133">检测结果统计</h4>
+          <div style="display:flex;gap:24px;flex-wrap:wrap">
+            <div style="text-align:center;min-width:70px"><div style="font-size:26px;font-weight:700;color:#409eff">{{ inferenceResultDetailData.detectionSummary.totalImages || 0 }}</div><div style="font-size:12px;color:#909399;margin-top:2px">总图片数</div></div>
+            <div style="text-align:center;min-width:70px"><div style="font-size:26px;font-weight:700;color:#67c23a">{{ inferenceResultDetailData.detectionSummary.totalDetections || 0 }}</div><div style="font-size:12px;color:#909399;margin-top:2px">检出目标</div></div>
+            <div style="text-align:center;min-width:70px"><div style="font-size:26px;font-weight:700;color:#e6a23c">{{ inferenceResultDetailData.detectionSummary.imagesWithDetections || 0 }}</div><div style="font-size:12px;color:#909399;margin-top:2px">有目标图片</div></div>
+            <div style="text-align:center;min-width:70px"><div style="font-size:20px;font-weight:700;color:#909399">{{ inferenceResultDetailData.detectionSummary.confidenceThreshold || '-' }}</div><div style="font-size:12px;color:#909399;margin-top:2px">置信度阈值</div></div>
           </div>
-          <div v-if="inferenceResultDetailData.detectionSummary.classCounts && Object.keys(inferenceResultDetailData.detectionSummary.classCounts).length" style="margin-top:10px">
-            <span style="font-size:12px;color:#909399;margin-right:8px">类别分布:</span>
-            <el-tag v-for="(count,cls) in inferenceResultDetailData.detectionSummary.classCounts" :key="cls" size="small" style="margin:2px">{{ cls }}: {{ count }}</el-tag>
+          <div v-if="inferenceResultDetailData.detectionSummary.classCounts && Object.keys(inferenceResultDetailData.detectionSummary.classCounts).length" style="margin-top:10px;padding-top:10px;border-top:1px solid #e4e7ed">
+            <span style="font-size:12px;color:#606266;font-weight:600">类别分布:</span>
+            <el-tag v-for="(count,cls) in inferenceResultDetailData.detectionSummary.classCounts" :key="cls" size="small" type="success" style="margin-left:6px;margin-top:4px">{{ cls }} × {{ count }}</el-tag>
           </div>
         </div>
-        <div v-if="inferenceResultImages.length" style="margin-bottom:14px">
-          <h4 style="margin:0 0 8px;font-size:14px;color:#303133">推理图片 ({{ inferenceResultImages.length }})</h4>
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;max-height:400px;overflow:auto">
-            <div v-for="img in inferenceResultImages" :key="img.path" style="border:1px solid #ebeef5;border-radius:6px;overflow:hidden;cursor:pointer" @click="openInferenceResultImage(img.path)">
-              <img :src="getInferenceResultImageUrl(img.path)" style="width:100%;height:140px;object-fit:cover;display:block" />
-              <div style="padding:4px 8px;font-size:11px;color:#606266;text-overflow:ellipsis;overflow:hidden;white-space:nowrap">{{ img.name }}</div>
+
+        <div v-if="hasPredictionGrid" style="margin-bottom:18px;text-align:center">
+          <h4 style="margin:0 0 10px;font-size:14px;color:#303133">预测结果总览（网格图）- 点击放大查看</h4>
+          <div style="display:inline-block;border:2px solid #409eff;border-radius:8px;overflow:hidden;cursor:pointer;max-width:100%" @click="openInferenceResultImage('prediction_grid.jpg')">
+            <img :src="getGridImageUrl()" style="max-width:100%;max-height:500px;display:block" />
+          </div>
+        </div>
+
+        <div v-if="annotatedImages.length">
+          <h4 style="margin:0 0 10px;font-size:14px;color:#303133">单张检测结果 ({{ annotatedImages.length }}张) - 带检测框标注，点击查看大图</h4>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;max-height:400px;overflow:auto;padding:2px">
+            <div v-for="img in annotatedImages" :key="img.path" style="border:1px solid #dcdfe6;border-radius:8px;overflow:hidden;cursor:pointer;background:#fff;transition:all .2s" @click="openAnnotatedImage(img.path)" @mouseenter="$event.currentTarget.style.borderColor='#409eff';$event.currentTarget.style.boxShadow='0 2px 12px rgba(64,158,255,.2)'" @mouseleave="$event.currentTarget.style.borderColor='#dcdfe6';$event.currentTarget.style.boxShadow='none'">
+              <img :src="getAnnotatedImageUrl(img.path)" style="width:100%;height:150px;object-fit:contain;display:block;background:#1a1a1a" />
+              <div style="padding:6px 10px 8px;border-top:1px solid #ebeef5">
+                <div style="font-size:12px;color:#303133;font-weight:600;text-overflow:ellipsis;overflow:hidden;white-space:nowrap">{{ img.name }}</div>
+                <el-tag v-if="getAnnotatedDetections(img.name)!==null" size="small" :type="getAnnotatedDetections(img.name)>0?'success':'info'" round style="margin-top:4px">{{ getAnnotatedDetections(img.name) || 0 }}个目标</el-tag>
+              </div>
             </div>
           </div>
         </div>
+        <div v-else style="text-align:center;padding:30px;color:#909399">暂无推理结果图片</div>
       </div>
       <template #footer><el-button @click="inferenceResultVisible=false">关闭</el-button></template>
     </el-dialog>
@@ -662,6 +675,8 @@ const inferenceFilter=reactive({modelName:'',dataName:''})
 const predictDialogVisible=ref(false),predictForm=reactive({modelId:null,modelName:'',dataName:''}),predictLoading=ref(false)
 const inferenceResultVisible=ref(false),inferenceResultTab=ref('result'),inferenceResultDetailData=ref({}),inferenceResultDetailLoading=ref(false),inferenceResultImages=ref([])
 const currentInferenceResultModelId=ref(null),currentInferenceResultDataName=ref(''),currentInferenceResultTitle=ref('')
+const annotatedImages=computed(()=>(inferenceResultDetailData.value.files||[]).filter(f=>f.isImage&&!f.isDirectory&&f.path.startsWith('annotated/')))
+const hasPredictionGrid=computed(()=>(inferenceResultDetailData.value.files||[]).some(f=>f.name==='prediction_grid.jpg'&&!f.isDirectory))
 let predictLogPollTimer=null
 const showDistributedTrainDialog=ref(false),distributedTrainForm=reactive({dataName:'',epochs:2,imgsz:640,targetNode:'',gpuType:'',gpuCount:1})
 const schedulableNodes=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable))
@@ -836,6 +851,10 @@ const viewInferenceResult=async inf=>{currentInferenceResultTitle.value=`${inf.m
 const loadInferenceResultDetail=async()=>{inferenceResultDetailLoading.value=true;try{const r=await api.value.get(`/api/models/${currentInferenceResultModelId.value}/predict-results`,{params:{dataName:currentInferenceResultDataName.value}});inferenceResultDetailData.value=r.data||{};inferenceResultImages.value=(r.data.files||[]).filter(f=>f.isImage&&!f.isDirectory)}catch(e){inferenceResultDetailData.value={exists:false}}finally{inferenceResultDetailLoading.value=false}}
 const getInferenceResultImageUrl=path=>`/api/models/${currentInferenceResultModelId.value}/predict-image?dataName=${encodeURIComponent(currentInferenceResultDataName.value)}&imageName=&path=${encodeURIComponent(path)}&token=${token.value}`
 const openInferenceResultImage=path=>{window.open(getInferenceResultImageUrl(path),'_blank')}
+const getGridImageUrl=()=>getInferenceResultImageUrl('prediction_grid.jpg')
+const getAnnotatedImageUrl=path=>getInferenceResultImageUrl(path)
+const openAnnotatedImage=path=>{window.open(getAnnotatedImageUrl(path),'_blank')}
+const getAnnotatedDetections=fileName=>{const results=inferenceResultDetailData.value.detectionSummary?.perImageResults;if(!results)return null;const item=results.find(r=>r.originalName===fileName);return item?item.detections:0}
 const handleDeleteInference=async inf=>{try{await api.value.delete(`/api/models/inferences/${inf.id}`);showMsg('推理记录已删除');loadInferenceRecords()}catch(e){showMsg(e.response?.data?.message||'删除失败','error')}}
 
 const setLogRef=(n,t,el)=>{if(el)logRefs.value[`${n}-${t}`]=el}
