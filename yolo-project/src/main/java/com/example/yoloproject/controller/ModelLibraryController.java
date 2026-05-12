@@ -598,7 +598,7 @@ public class ModelLibraryController {
         }
 
         String jobName = K8sClientService.sanitizeK8sName(model.getModelName() + "_predict_" + dataName + "-predict-job");
-        String jobLog = k8sClientService.getJobLogs(jobName);
+        String jobLog = yoloService.getJobLogs(jobName);
 
         InferenceRecord record = inferenceRecordRepository.findByModelIdAndDataName(id, dataName).orElse(null);
         String status = record != null ? record.getStatus() : "unknown";
