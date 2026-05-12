@@ -588,7 +588,8 @@
     <el-dialog title="模型推理 - 使用训练好的模型对数据集进行目标检测" v-model="predictDialogVisible" width="560px">
       <el-form label-width="90px">
         <el-form-item label="模型"><el-tag type="success">{{ predictForm.modelName }}</el-tag></el-form-item>
-        <el-form-item label="目标数据集"><el-select v-model="predictForm.dataName" placeholder="选择要进行推理检测的数据集" style="width:100%"><el-option v-for="ds in datasetList" :key="ds.name" :label="ds.name + (ds.preprocessed?' (已预处理)':' (未预处理)')" :value="ds.name" /></el-select></el-form-item>
+        <el-form-item label="目标数据集"><el-select v-model="predictForm.dataName" placeholder="选择已预处理的数据集进行推理" style="width:100%"><el-option v-for="ds in preprocessedDatasetList" :key="ds.name" :label="ds.name" :value="ds.name" /></el-select></el-form-item>
+        <el-form-item v-if="preprocessedDatasetList.length===0"><div style="color:#f56c6c;font-size:12px">⚠️ 当前没有已预处理的数据集，请先上传并预处理数据集</div></el-form-item>
         <el-form-item><div style="color:#909399;font-size:12px;line-height:1.6">将使用所选模型对目标数据集中的图片进行推理检测，检测结果将保存到runs目录中。推理完成后可查看标注后的图片结果。</div></el-form-item>
       </el-form>
       <template #footer><el-button @click="predictDialogVisible=false">取消</el-button><el-button type="primary" @click="handlePredict" :loading="predictLoading">开始推理</el-button></template>
@@ -673,6 +674,7 @@ let statusRefreshTimer=null
 
 const isAdmin=computed(()=>currentUser.role==='ROOT'||currentUser.role==='ADMIN')
 const pagedDatasets=computed(()=>{const s=(currentPage.value-1)*pageSize.value;return datasetList.value.slice(s,s+pageSize.value)})
+const preprocessedDatasetList=computed(()=>datasetList.value.filter(ds=>ds.preprocessed))
 const api=computed(()=>axios.create({headers:{Authorization:`Bearer ${token.value}`}}))
 const showMsg=(msg,type='success')=>ElMessage({message:msg,type,duration:3000,center:true})
 

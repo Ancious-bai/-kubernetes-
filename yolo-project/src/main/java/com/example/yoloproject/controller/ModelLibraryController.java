@@ -1,8 +1,10 @@
 package com.example.yoloproject.controller;
 
+import com.example.yoloproject.entity.Dataset;
 import com.example.yoloproject.entity.InferenceRecord;
 import com.example.yoloproject.entity.ModelLibrary;
 import com.example.yoloproject.entity.TrainingRecord;
+import com.example.yoloproject.repository.DatasetRepository;
 import com.example.yoloproject.repository.InferenceRecordRepository;
 import com.example.yoloproject.repository.ModelLibraryRepository;
 import com.example.yoloproject.repository.TrainingRecordRepository;
@@ -36,6 +38,9 @@ public class ModelLibraryController {
 
     @Autowired
     private InferenceRecordRepository inferenceRecordRepository;
+
+    @Autowired
+    private DatasetRepository datasetRepository;
 
     @Autowired
     private YoloService yoloService;
@@ -282,6 +287,13 @@ public class ModelLibraryController {
         String targetDataName = (String) request.get("dataName");
         if (targetDataName == null || targetDataName.isEmpty()) {
             response.put("message", "请指定目标数据集");
+            response.put("status", "error");
+            return ResponseEntity.badRequest().body(response);
+        }
+
+        Dataset dataset = datasetRepository.findByName(targetDataName).orElse(null);
+        if (dataset == null || !Boolean.TRUE.equals(dataset.getPreprocessed())) {
+            response.put("message", "该数据集未预处理，无法进行推理。请先对数据集进行预处理操作。");
             response.put("status", "error");
             return ResponseEntity.badRequest().body(response);
         }

@@ -1,4 +1,4 @@
-import os, shutil, sys
+import os, shutil, sys, glob
 
 YOLO_DIR = '/tmp/Ultralytics'
 os.environ['YOLO_CONFIG_DIR'] = YOLO_DIR
@@ -28,10 +28,19 @@ from ultralytics import YOLO
 import argparse
 
 
+def collect_all_images(source_dir):
+    image_extensions = ('*.jpg', '*.jpeg', '*.png', '*.bmp', '*.webp')
+    all_images = []
+    for ext in image_extensions:
+        all_images.extend(glob.glob(os.path.join(source_dir, '**', ext), recursive=True))
+        all_images.extend(glob.glob(os.path.join(source_dir, '**', ext.upper()), recursive=True))
+    return sorted(set(all_images))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, required=True, help="模型文件路径")
-    parser.add_argument('--source', type=str, required=True, help="推理数据源(图片目录或单张图片)")
+    parser.add_argument('--source', type=str, required=True, help="推理数据源(预处理数据集目录)")
     parser.add_argument('--name', type=str, default=None, help="输出目录名")
     parser.add_argument('--imgsz', type=int, default=640, help="图像尺寸")
     args = parser.parse_args()
@@ -52,6 +61,19 @@ def main():
         source = os.path.join(data_root, source)
     print(f"Source: {source}")
 
+    images_dir = os.path.join(source, 'images') if os.path.isdir(source) else source
+    if not os.path.exists(images_dir):
+        print(f"ERROR: 图片目录不存在: {images_dir}")
+        sys.exit(1)
+
+    all_images = collect_all_images(images_dir)
+    print(f"Found {len(all_images)} images to predict")
+
+    if len(all_images) == 0:
+        print("WARNING: No images found in source directory!")
+        subdirs = [d for d in os.listdir(images_dir) if os.path.isdir(os.path.join(images_dir, d))]
+        print(f"Subdirectories in images/: {subdirs}")
+
     base_name = args.name if args.name else os.path.basename(model_path).replace('.pt', '') + "_predict"
     output_name = base_name
 
@@ -62,7 +84,7 @@ def main():
                 shutil.copy(src, FONT_PATH); break
 
     results = model.predict(
-        source=source,
+        source=images_dir,
         imgsz=args.imgsz,
         save=True,
         project=project_dir,
@@ -76,9 +98,8 @@ def main():
     output_dir = os.path.join(project_dir, output_name)
     print(f"Output directory: {output_dir}")
     if os.path.exists(output_dir):
-        files = os.listdir(output_dir)
-        image_files = [f for f in files if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-        print(f"Generated {len(image_files)} prediction images")
+        result_images = collect_all_images(output_dir)
+        print(f"Generated {len(result_images)} prediction results")
 
     print("PREDICTION_COMPLETE")
 
