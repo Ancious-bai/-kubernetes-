@@ -167,7 +167,7 @@
                 <tr v-for="inf in inferenceList" :key="inf.id">
                   <td><span style="font-weight:600">{{ inf.modelName }}</span></td>
                   <td><span>{{ inf.dataName }}</span></td>
-                  <td><el-tag :type="inf.status==='completed'?'success':(inf.status==='running'||inf.status==='running'?'warning':'info')" size="small">{{ inf.status==='completed'?'已完成':(inf.status==='running'||inf.status==='running'?'运行中':'排队中') }}</el-tag></td>
+                  <td><el-tag :type="inf.status==='completed'?'success':(inf.status==='running'?'warning':(inf.status==='failed'?'danger':'info'))" size="small">{{ inf.status==='completed'?'已完成':(inf.status==='running'?'运行中':(inf.status==='failed'?'失败':'排队中')) }}</el-tag></td>
                   <td><span>{{ inf.createdBy }}</span></td>
                   <td><span class="param-fixed">{{ inf.createdAt }}</span></td>
                   <td><div class="record-actions">
@@ -504,12 +504,21 @@
     </el-dialog>
 
     <el-dialog :title="'推理结果 - ' + currentInferenceResultTitle" v-model="inferenceResultVisible" width="900px" :close-on-click-modal="false">
-      <div style="display:flex;gap:8px;margin-bottom:14px">
-        <el-button size="small" :type="inferenceResultTab==='result'?'primary':'default'" @click="inferenceResultTab='result';loadInferenceResultDetail()">推理结果</el-button>
-      </div>
       <div v-if="inferenceResultDetailLoading" style="text-align:center;padding:30px"><el-icon class="is-loading" size="24"><Loading /></el-icon><p>加载中...</p></div>
       <div v-else-if="!inferenceResultDetailData.exists" style="text-align:center;padding:30px;color:#909399">结果目录不存在</div>
       <div v-else>
+        <div v-if="inferenceResultDetailData.detectionSummary" style="margin-bottom:16px;padding:14px;background:#f5f7fa;border-radius:8px">
+          <h4 style="margin:0 0 10px;font-size:14px;color:#303133">检测摘要</h4>
+          <div style="display:flex;gap:20px;flex-wrap:wrap">
+            <div style="text-align:center"><div style="font-size:24px;font-weight:700;color:#409eff">{{ inferenceResultDetailData.detectionSummary.totalImages || 0 }}</div><div style="font-size:12px;color:#909399">推理图片数</div></div>
+            <div style="text-align:center"><div style="font-size:24px;font-weight:700;color:#67c23a">{{ inferenceResultDetailData.detectionSummary.totalDetections || 0 }}</div><div style="font-size:12px;color:#909399">检测目标数</div></div>
+            <div style="text-align:center"><div style="font-size:24px;font-weight:700;color:#e6a23c">{{ inferenceResultDetailData.detectionSummary.confidenceThreshold || '-' }}</div><div style="font-size:12px;color:#909399">置信度阈值</div></div>
+          </div>
+          <div v-if="inferenceResultDetailData.detectionSummary.classCounts && Object.keys(inferenceResultDetailData.detectionSummary.classCounts).length" style="margin-top:10px">
+            <span style="font-size:12px;color:#909399;margin-right:8px">类别分布:</span>
+            <el-tag v-for="(count,cls) in inferenceResultDetailData.detectionSummary.classCounts" :key="cls" size="small" style="margin:2px">{{ cls }}: {{ count }}</el-tag>
+          </div>
+        </div>
         <div v-if="inferenceResultImages.length" style="margin-bottom:14px">
           <h4 style="margin:0 0 8px;font-size:14px;color:#303133">推理图片 ({{ inferenceResultImages.length }})</h4>
           <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;max-height:400px;overflow:auto">
@@ -518,23 +527,6 @@
               <div style="padding:4px 8px;font-size:11px;color:#606266;text-overflow:ellipsis;overflow:hidden;white-space:nowrap">{{ img.name }}</div>
             </div>
           </div>
-        </div>
-        <h4 style="margin:0 0 8px;font-size:14px;color:#303133">文件列表</h4>
-        <div style="max-height:300px;overflow:auto">
-          <table class="records-table" style="font-size:12px">
-            <thead><tr><th>文件名</th><th>路径</th><th>类型</th><th>大小</th><th>操作</th></tr></thead>
-            <tbody>
-              <tr v-for="f in inferenceResultDetailData.files" :key="f.path">
-                <td><span>{{ f.name }}</span></td>
-                <td><span style="color:#909399;font-size:11px">{{ f.path }}</span></td>
-                <td><el-tag v-if="f.isDirectory" size="small" type="info">目录</el-tag><el-tag v-else-if="f.isImage" size="small" type="success">图片</el-tag><el-tag v-else-if="f.isCsv" size="small" type="warning">CSV</el-tag><el-tag v-else-if="f.isText" size="small">文本</el-tag><el-tag v-else size="small" type="info">文件</el-tag></td>
-                <td><span v-if="!f.isDirectory">{{ (f.size/1024).toFixed(1) }}KB</span></td>
-                <td>
-                  <el-button v-if="f.isImage && !f.isDirectory" size="small" type="primary" @click="openInferenceResultImage(f.path)">查看</el-button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
         </div>
       </div>
       <template #footer><el-button @click="inferenceResultVisible=false">关闭</el-button></template>
@@ -668,7 +660,6 @@ const modelList=ref([])
 const inferenceList=ref([])
 const inferenceFilter=reactive({modelName:'',dataName:''})
 const predictDialogVisible=ref(false),predictForm=reactive({modelId:null,modelName:'',dataName:''}),predictLoading=ref(false)
-const viewPredictImagesVisible=ref(false),viewPredictImagesList=ref([]),viewPredictImagesModelId=ref(null),viewPredictImagesDataName=ref('')
 const inferenceResultVisible=ref(false),inferenceResultTab=ref('result'),inferenceResultDetailData=ref({}),inferenceResultDetailLoading=ref(false),inferenceResultImages=ref([])
 const currentInferenceResultModelId=ref(null),currentInferenceResultDataName=ref(''),currentInferenceResultTitle=ref('')
 let predictLogPollTimer=null
@@ -828,24 +819,20 @@ const getRunsImageUrl=path=>`/api/nodes/runs/${runsResultCurrentRecord.value}/${
 const openRunsImage=path=>{window.open(getRunsImageUrl(path),'_blank')}
 const loadRunsFile=async(recordName,type,path)=>{try{const r=await api.value.get(`/api/nodes/runs/${recordName}/${type}/file`,{params:{path}});if(r.data.content){runsFileTitle.value=r.data.fileName||path;runsFileContent.value=r.data.content;runsFileVisible.value=true}else{showMsg(r.data.error||'文件读取失败','error')}}catch(e){showMsg('文件读取失败','error')}}
 
-const switchToModels=()=>{activePage.value='models';loadModelList();loadInferenceRecords()}
+const switchToModels=()=>{activePage.value='models';loadModelList();loadInferenceRecords().then(()=>{if(inferenceList.value.some(i=>i.status==='running'))startInferenceStatusRefresh()})}
 const loadModelList=async()=>{try{const r=await api.value.get('/api/models');modelList.value=r.data}catch(e){}}
 const showPredictDialog=m=>{predictForm.modelId=m.id;predictForm.modelName=m.modelName;predictForm.dataName='';predictDialogVisible.value=true}
 const handlePredict=async()=>{if(!predictForm.dataName){showMsg('请选择目标数据集','warning');return}predictLoading.value=true;try{const r=await api.value.post(`/api/models/${predictForm.modelId}/predict`,{dataName:predictForm.dataName});if(r.data.status==='success'){showMsg('推理任务已提交');predictDialogVisible.value=false;const logKey=`${predictForm.modelName}_predict_${predictForm.dataName}`;predictLogs.value[logKey]='';connectPredictLog(predictForm.modelId,predictForm.dataName,logKey);startInferenceStatusRefresh()}}catch(e){showMsg(e.response?.data?.message||'推理失败','error')}finally{predictLoading.value=false}}
 const connectPredictLog=(modelId,dataName,logKey)=>{if(predictLogPollTimer)clearInterval(predictLogPollTimer);const loadOnce=async()=>{try{const r=await api.value.get(`/api/models/${modelId}/predict-log`,{params:{dataName}});if(r.data.log){predictLogs.value[logKey]=r.data.log;autoScroll(logKey,'predict')}}catch(e){}};loadOnce();predictLogPollTimer=setInterval(loadOnce,5000);setTimeout(()=>{if(predictLogPollTimer){clearInterval(predictLogPollTimer);predictLogPollTimer=null}},600000)}
-const startInferenceStatusRefresh=()=>{if(inferenceStatusTimer)return;inferenceStatusTimer=setInterval(async()=>{if(Object.keys(predictLogs.value).length===0&&!hasActiveInferenceTasks()){stopInferenceStatusRefresh();return}await checkInferenceStatusChanges()},3000)}
+const startInferenceStatusRefresh=()=>{if(inferenceStatusTimer)return;inferenceStatusTimer=setInterval(async()=>{await checkInferenceStatusChanges();if(!inferenceList.value.some(i=>i.status==='running')&&Object.keys(predictLogs.value).length===0){stopInferenceStatusRefresh()}},3000)}
 const stopInferenceStatusRefresh=()=>{if(inferenceStatusTimer){clearInterval(inferenceStatusTimer);inferenceStatusTimer=null}}
-const hasActiveInferenceTasks=()=>inferenceList.value.some(i=>i.status==='running'||i.status==='running')
 let oldInferenceRecords=[]
-const checkInferenceStatusChanges=async()=>{try{const newRecords=(await api.value.get('/api/models/inferences')).data;for(const inf of newRecords){const oldInf=oldInferenceRecords.find(o=>o.id===inf.id);if(oldInf&&oldInf.status!==inf.status){if((oldInf.status==='running')&&(inf.status==='completed')){showMsg(`推理 ${inf.modelName}→${inf.dataName} 已完成`)}else if((oldInf.status==='running')&&(inf.status==='failed')){showMsg(`推理 ${inf.modelName}→${inf.dataName} 失败`,'error')}if(inf.status!=='running'){const logKey=`${inf.modelName}_predict_${inf.dataName}`;if(predictLogPollTimer){clearInterval(predictLogPollTimer);predictLogPollTimer=null}}}}oldInferenceRecords=newRecords;inferenceList.value=newRecords}catch(e){}}
+const checkInferenceStatusChanges=async()=>{try{const newRecords=(await api.value.get('/api/models/inferences')).data;let changed=false;for(const inf of newRecords){const oldInf=oldInferenceRecords.find(o=>o.id===inf.id);if(oldInf&&oldInf.status!==inf.status){changed=true;if((oldInf.status==='running')&&(inf.status==='completed')){showMsg(`推理 ${inf.modelName}→${inf.dataName} 已完成`)}else if((oldInf.status==='running')&&(inf.status==='failed')){showMsg(`推理 ${inf.modelName}→${inf.dataName} 失败`,'error')}if(inf.status!=='running'){const logKey=`${inf.modelName}_predict_${inf.dataName}`;if(predictLogs.value[logKey]){predictLogs.value[logKey]+='\n\n[推理已结束]';delete predictLogs.value[logKey]}}}}oldInferenceRecords=newRecords;inferenceList.value=newRecords}catch(e){}}
 const handleDeleteModel=async m=>{try{await api.value.delete(`/api/models/${m.id}`);showMsg('模型已删除');loadModelList();loadInferenceRecords()}catch(e){showMsg(e.response?.data?.message||'删除失败','error')}}
-const loadInferenceRecords=async()=>{try{const params={};if(inferenceFilter.modelName)params.modelName=inferenceFilter.modelName;if(inferenceFilter.dataName)params.dataName=inferenceFilter.dataName;const r=await api.value.get('/api/models/inferences',{params});inferenceList.value=r.data;if(oldInferenceRecords.length===0)oldInferenceRecords=[...r.data]}catch(e){}}
+const loadInferenceRecords=async()=>{try{const params={};if(inferenceFilter.modelName)params.modelName=inferenceFilter.modelName;if(inferenceFilter.dataName)params.dataName=inferenceFilter.dataName;const r=await api.value.get('/api/models/inferences',{params});inferenceList.value=r.data;oldInferenceRecords=[...r.data]}catch(e){}}
 const resetInferenceFilter=()=>{inferenceFilter.modelName='';inferenceFilter.dataName='';loadInferenceRecords()}
-const showPredictImages=async inf=>{viewInferenceResult(inf)}
-const getViewPredictImageUrl=name=>`/api/models/${viewPredictImagesModelId.value}/predict-image?dataName=${encodeURIComponent(viewPredictImagesDataName.value)}&imageName=${encodeURIComponent(name)}&token=${token.value}`
-const openViewPredictImage=name=>{window.open(getViewPredictImageUrl(name),'_blank')}
 const viewInferenceLog=async inf=>{const logKey=`${inf.modelName}_predict_${inf.dataName}`;if(!predictLogs.value[logKey]){predictLogs.value[logKey]=''}connectPredictLog(inf.modelId,inf.dataName,logKey)}
-const viewInferenceResult=async inf=>{currentInferenceResultTitle.value=`${inf.modelName} → ${inf.dataName}`;currentInferenceResultModelId.value=inf.modelId;currentInferenceResultDataName.value=inf.dataName;inferenceResultVisible=true;inferenceResultTab.value='result';inferenceResultDetailData.value={};inferenceResultDetailLoading.value=true;inferenceResultImages.value=[];loadInferenceResultDetail()}
+const viewInferenceResult=async inf=>{currentInferenceResultTitle.value=`${inf.modelName} → ${inf.dataName}`;currentInferenceResultModelId.value=inf.modelId;currentInferenceResultDataName.value=inf.dataName;inferenceResultVisible.value=true;inferenceResultTab.value='result';inferenceResultDetailData.value={};inferenceResultDetailLoading.value=true;inferenceResultImages.value=[];loadInferenceResultDetail()}
 const loadInferenceResultDetail=async()=>{inferenceResultDetailLoading.value=true;try{const r=await api.value.get(`/api/models/${currentInferenceResultModelId.value}/predict-results`,{params:{dataName:currentInferenceResultDataName.value}});inferenceResultDetailData.value=r.data||{};inferenceResultImages.value=(r.data.files||[]).filter(f=>f.isImage&&!f.isDirectory)}catch(e){inferenceResultDetailData.value={exists:false}}finally{inferenceResultDetailLoading.value=false}}
 const getInferenceResultImageUrl=path=>`/api/models/${currentInferenceResultModelId.value}/predict-image?dataName=${encodeURIComponent(currentInferenceResultDataName.value)}&imageName=&path=${encodeURIComponent(path)}&token=${token.value}`
 const openInferenceResultImage=path=>{window.open(getInferenceResultImageUrl(path),'_blank')}

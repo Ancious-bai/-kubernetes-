@@ -420,14 +420,22 @@ public class ModelLibraryController {
                         Thread.sleep(5000);
                         String status = k8sClientService.getJobStatus(jobName);
                         if ("Succeeded".equals(status) || "COMPLETED".equals(status) || "DONE".equals(status)) {
-                            Map<String, Double> metrics = extractMetrics(predictDir);
                             InferenceRecord ir = inferenceRecordRepository.findById(recordId).orElse(null);
                             if (ir != null) {
-                                ir.setMap50(metrics.get("map50"));
-                                ir.setMap5095(metrics.get("map50_95"));
-                                ir.setPrecision(metrics.get("precision"));
-                                ir.setRecall(metrics.get("recall"));
                                 ir.setStatus("completed");
+                                try {
+                                    File summaryFile = new File(predictDir, "detection_summary.json");
+                                    if (summaryFile.exists()) {
+                                        String content = String.join("", Files.readAllLines(summaryFile.toPath()));
+                                        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                                        Map<String, Object> summary = mapper.readValue(content, Map.class);
+                                        if (summary.get("totalDetections") != null) {
+                                            ir.setMap50(Double.valueOf(summary.get("totalDetections").toString()));
+                                        }
+                                    }
+                                } catch (Exception ex) {
+                                    log.warn("Failed to read detection summary: {}", ex.getMessage());
+                                }
                                 inferenceRecordRepository.save(ir);
                             }
                             return;
@@ -479,40 +487,6 @@ public class ModelLibraryController {
         }
     }
 
-    private Map<String, Double> extractMetrics(String predictDir) {
-        Map<String, Double> metrics = new HashMap<>();
-        File resultsCsv = new File(predictDir, "results.csv");
-        if (resultsCsv.exists()) {
-            try {
-                List<String> lines = Files.readAllLines(resultsCsv.toPath());
-                if (!lines.isEmpty()) {
-                    String headerLine = lines.get(0).trim();
-                    String lastLine = lines.get(lines.size() - 1).trim();
-                    while (lastLine.isEmpty() && lines.size() > 1) {
-                        lines.remove(lines.size() - 1);
-                        lastLine = lines.get(lines.size() - 1).trim();
-                    }
-                    String[] headers = headerLine.split(",");
-                    String[] values = lastLine.split(",");
-                    for (int i = 0; i < headers.length && i < values.length; i++) {
-                        String h = headers[i].trim();
-                        String v = values[i].trim();
-                        if (h.contains("mAP50-95") || h.contains("mAP50-95(B)")) {
-                            try { metrics.put("map50_95", Double.parseDouble(v)); } catch (Exception ignored) {}
-                        } else if (h.contains("mAP50") || h.contains("mAP50(B)")) {
-                            try { metrics.put("map50", Double.parseDouble(v)); } catch (Exception ignored) {}
-                        } else if (h.contains("precision") || h.contains("precision(B)")) {
-                            try { metrics.put("precision", Double.parseDouble(v)); } catch (Exception ignored) {}
-                        } else if (h.contains("recall") || h.contains("recall(B)")) {
-                            try { metrics.put("recall", Double.parseDouble(v)); } catch (Exception ignored) {}
-                        }
-                    }
-                }
-            } catch (Exception ignored) {}
-        }
-        return metrics;
-    }
-
     @GetMapping("/{id}/predict-results")
     public ResponseEntity<Map<String, Object>> getPredictResults(
             @PathVariable Long id,
@@ -554,6 +528,17 @@ public class ModelLibraryController {
         response.put("count", images.size());
         response.put("files", allFiles);
         response.put("resultsCsv", resultsCsvContent);
+
+        File summaryFile = new File(predictDir, "detection_summary.json");
+        if (summaryFile.exists()) {
+            try {
+                String summaryContent = String.join("", Files.readAllLines(summaryFile.toPath()));
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                Map<String, Object> summary = mapper.readValue(summaryContent, Map.class);
+                response.put("detectionSummary", summary);
+            } catch (Exception ignored) {}
+        }
+
         return ResponseEntity.ok(response);
     }
 

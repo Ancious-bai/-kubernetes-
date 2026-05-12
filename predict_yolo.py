@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-import os, shutil, sys, glob
+import os, shutil, sys, glob, json
+from pathlib import Path
+
 
 def setup_env():
     YOLO_DIR = '/tmp/Ultralytics'
@@ -39,13 +41,62 @@ def collect_all_images(source_dir):
     return sorted(set(results))
 
 
+def save_labels_from_results(results, labels_dir, model_names):
+    os.makedirs(labels_dir, exist_ok=True)
+    total_detections = 0
+    class_counts = {}
+    per_image_results = []
+
+    for r in results:
+        img_path = getattr(r, 'path', '')
+        img_name = os.path.basename(img_path) if img_path else 'unknown'
+        img_stem = os.path.splitext(img_name)[0]
+        n = len(r.boxes) if r.boxes is not None else 0
+        total_detections += n
+
+        image_info = {
+            'image': img_name,
+            'detections': n,
+            'boxes': []
+        }
+
+        if n > 0:
+            label_path = os.path.join(labels_dir, img_stem + '.txt')
+            with open(label_path, 'w') as f:
+                for box in r.boxes:
+                    cls_id = int(box.cls[0])
+                    conf = float(box.conf[0])
+                    xywhn = box.xywhn[0].tolist()
+                    x_center = xywhn[0]
+                    y_center = xywhn[1]
+                    width = xywhn[2]
+                    height = xywhn[3]
+                    f.write(f"{cls_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f} {conf:.6f}\n")
+
+                    cls_name = model_names.get(cls_id, str(cls_id))
+                    class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
+
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    image_info['boxes'].append({
+                        'class': cls_name,
+                        'class_id': cls_id,
+                        'confidence': round(conf, 4),
+                        'bbox_xyxy': [round(v, 2) for v in [x1, y1, x2, y2]],
+                        'bbox_xywhn': [round(v, 6) for v in xywhn]
+                    })
+
+        per_image_results.append(image_info)
+
+    return total_detections, class_counts, per_image_results
+
+
 def main():
     parser = argparse.ArgumentParser(description='YOLO Predict Script')
     parser.add_argument('--model', required=True)
     parser.add_argument('--source', required=True)
     parser.add_argument('--name', default=None)
     parser.add_argument('--imgsz', type=int, default=640)
-    parser.add_argument('--conf', type=float, default=0.05, help='置信度阈值(默认0.05)')
+    parser.add_argument('--conf', type=float, default=0.25, help='confidence threshold')
     args = parser.parse_args()
 
     data_root = os.environ.get('DATA_ROOT', '/app/data')
@@ -90,21 +141,16 @@ def main():
     model = YOLO(model_path)
     print(f"[PREDICT] Model classes: {model.names}")
 
-    has_top_level_images = any(
-        f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp'))
-        and not os.path.basename(os.path.dirname(f)).startswith('.')
-        for f in glob.glob(os.path.join(images_dir, '*'))
-        if os.path.isfile(f)
-    )
+    output_dir = os.path.join(project_dir, output_name)
+    if os.path.exists(output_dir):
+        print(f"[PREDICT] Cleaning existing output directory: {output_dir}")
+        shutil.rmtree(output_dir)
 
     print(f"[PREDICT] Starting prediction on {len(all_images)} images...")
 
-    total_detections = 0
     predict_kwargs = dict(
         imgsz=args.imgsz,
         save=True,
-        save_txt=True,
-        save_conf=True,
         project=project_dir,
         name=output_name,
         exist_ok=True,
@@ -112,52 +158,41 @@ def main():
         iou=0.45,
     )
 
-    if has_top_level_images:
-        print(f"[PREDICT] Using directory mode (images found at top level)")
-        results = model.predict(source=images_dir, verbose=True, **predict_kwargs)
-        for r in results:
-            n = len(r.boxes) if r.boxes is not None else 0
-            total_detections += n
-            if n > 0:
-                print(f"  {os.path.basename(r.path)}: {n} detections")
+    results = model.predict(source=all_images, verbose=True, **predict_kwargs)
+
+    print(f"[PREDICT] Prediction done, saving labels and summary...")
+
+    labels_dir = os.path.join(output_dir, 'labels')
+    total_detections, class_counts, per_image_results = save_labels_from_results(
+        results, labels_dir, model.names
+    )
+
+    summary = {
+        'total_images': len(all_images),
+        'total_detections': total_detections,
+        'class_counts': class_counts,
+        'confidence_threshold': args.conf,
+        'image_size': args.imgsz,
+        'model_path': args.model,
+        'model_classes': model.names,
+        'per_image_results': per_image_results
+    }
+
+    summary_path = os.path.join(output_dir, 'detection_summary.json')
+    with open(summary_path, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+
+    print(f"[PREDICT] Total detections: {total_detections} in {len(all_images)} images")
+    if class_counts:
+        print(f"[PREDICT] Class breakdown:")
+        for cls_name, count in sorted(class_counts.items(), key=lambda x: -x[1]):
+            print(f"  {cls_name}: {count}")
     else:
-        print(f"[PREDICT] Using list mode (images in subdirectories)")
-        batch_size = min(len(all_images), 16)
-        for i in range(0, len(all_images), batch_size):
-            batch = all_images[i:i + batch_size]
-            batch_num = i // batch_size + 1
-            total_batches = (len(all_images) + batch_size - 1) // batch_size
-            print(f"[PREDICT] Processing batch {batch_num}/{total_batches} ({len(batch)} images)")
-            try:
-                results = model.predict(source=batch, verbose=False, **predict_kwargs)
-                for r in results:
-                    n = len(r.boxes) if r.boxes is not None else 0
-                    total_detections += n
-                    if n > 0:
-                        print(f"  {os.path.basename(r.path)}: {n} detections")
-            except Exception as e:
-                print(f"[WARNING] Batch {batch_num} failed: {e}")
-                continue
+        print("[WARNING] No objects detected!")
 
-    print(f"[PREDICT] Total detections: {total_detections}")
-
-    if total_detections == 0:
-        print("[WARNING] No objects detected! Try lowering --conf threshold (current: {})".format(args.conf))
-
-    output_dir = os.path.join(project_dir, output_name)
-    result_count = 0
-    if os.path.exists(output_dir):
-        result_images = [f for f in collect_all_images(output_dir) if 'labels' not in f]
-        result_count = len(result_images)
-        print(f"[PREDICT] Generated {result_count} prediction images")
-
-        labels_dir = os.path.join(output_dir, 'labels')
-        if os.path.exists(labels_dir):
-            label_files = [f for f in os.listdir(labels_dir) if f.endswith('.txt')]
-            print(f"[PREDICT] Generated {len(label_files)} label files (detection results in YOLO format)")
-    else:
-        print(f"[WARNING] Output directory not created: {output_dir}")
-
+    label_files = [f for f in os.listdir(labels_dir) if f.endswith('.txt')] if os.path.exists(labels_dir) else []
+    print(f"[PREDICT] Label files: {len(label_files)}")
+    print(f"[PREDICT] Summary saved to: {summary_path}")
     print("PREDICTION_COMPLETE")
 
 
