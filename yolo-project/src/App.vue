@@ -534,8 +534,8 @@
             <div v-for="img in annotatedImages" :key="img.path" style="border:1px solid #dcdfe6;border-radius:8px;overflow:hidden;cursor:pointer;background:#fff;transition:all .2s" @click="openAnnotatedImage(img.path)" @mouseenter="$event.currentTarget.style.borderColor='#409eff';$event.currentTarget.style.boxShadow='0 2px 12px rgba(64,158,255,.2)'" @mouseleave="$event.currentTarget.style.borderColor='#dcdfe6';$event.currentTarget.style.boxShadow='none'">
               <img :src="getAnnotatedImageUrl(img.path)" style="width:100%;height:150px;object-fit:contain;display:block;background:#1a1a1a" />
               <div style="padding:6px 10px 8px;border-top:1px solid #ebeef5">
-                <div style="font-size:12px;color:#303133;font-weight:600;text-overflow:ellipsis;overflow:hidden;white-space:nowrap">{{ img.name }}</div>
-                <el-tag v-if="getAnnotatedDetections(img.name)!==null" size="small" :type="getAnnotatedDetections(img.name)>0?'success':'info'" round style="margin-top:4px">{{ getAnnotatedDetections(img.name) || 0 }}个目标</el-tag>
+                <div style="font-size:12px;color:#303133;font-weight:600;text-overflow:ellipsis;overflow:hidden;white-space:nowrap">{{ img.path.replace('annotated/','') }}</div>
+                <el-tag v-if="getAnnotatedDetections(img.path)!==null" size="small" :type="getAnnotatedDetections(img.path)>0?'success':'info'" round style="margin-top:4px">{{ getAnnotatedDetections(img.path) || 0 }}个目标</el-tag>
               </div>
             </div>
           </div>
@@ -618,11 +618,11 @@
     </el-dialog>
 
     <el-dialog title="模型推理 - 使用训练好的模型对数据集进行目标检测" v-model="predictDialogVisible" width="560px">
-      <el-form label-width="90px">
+      <el-form label-width="100px">
         <el-form-item label="模型"><el-tag type="success">{{ predictForm.modelName }}</el-tag></el-form-item>
         <el-form-item label="目标数据集"><el-select v-model="predictForm.dataName" placeholder="选择已预处理的数据集进行推理" style="width:100%"><el-option v-for="ds in preprocessedDatasetList" :key="ds.name" :label="ds.name" :value="ds.name" /></el-select></el-form-item>
+        <el-form-item label="置信度阈值"><el-input-number v-model="predictForm.conf" :min="0.01" :max="0.99" :step="0.05" :precision="2" size="default" style="width:160px" /><div style="color:#909399;font-size:12px;margin-top:4px">仅显示置信度≥此值的检测结果，值越低检出越多</div></el-form-item>
         <el-form-item v-if="preprocessedDatasetList.length===0"><div style="color:#f56c6c;font-size:12px">⚠️ 当前没有已预处理的数据集，请先上传并预处理数据集</div></el-form-item>
-        <el-form-item><div style="color:#909399;font-size:12px;line-height:1.6">将使用所选模型对目标数据集中的图片进行推理检测，检测结果将保存到runs目录中。推理完成后可查看标注后的图片结果。</div></el-form-item>
       </el-form>
       <template #footer><el-button @click="predictDialogVisible=false">取消</el-button><el-button type="primary" @click="handlePredict" :loading="predictLoading">开始推理</el-button></template>
     </el-dialog>
@@ -672,7 +672,7 @@ const runsFileVisible=ref(false),runsFileTitle=ref(''),runsFileContent=ref('')
 const modelList=ref([])
 const inferenceList=ref([])
 const inferenceFilter=reactive({modelName:'',dataName:''})
-const predictDialogVisible=ref(false),predictForm=reactive({modelId:null,modelName:'',dataName:''}),predictLoading=ref(false)
+const predictDialogVisible=ref(false),predictForm=reactive({modelId:null,modelName:'',dataName:'',conf:0.05}),predictLoading=ref(false)
 const inferenceResultVisible=ref(false),inferenceResultTab=ref('result'),inferenceResultDetailData=ref({}),inferenceResultDetailLoading=ref(false),inferenceResultImages=ref([])
 const currentInferenceResultModelId=ref(null),currentInferenceResultDataName=ref(''),currentInferenceResultTitle=ref('')
 const annotatedImages=computed(()=>(inferenceResultDetailData.value.files||[]).filter(f=>f.isImage&&!f.isDirectory&&f.path.startsWith('annotated/')))
@@ -836,8 +836,8 @@ const loadRunsFile=async(recordName,type,path)=>{try{const r=await api.value.get
 
 const switchToModels=()=>{activePage.value='models';loadModelList();loadInferenceRecords().then(()=>{if(inferenceList.value.some(i=>i.status==='running'))startInferenceStatusRefresh()})}
 const loadModelList=async()=>{try{const r=await api.value.get('/api/models');modelList.value=r.data}catch(e){}}
-const showPredictDialog=m=>{predictForm.modelId=m.id;predictForm.modelName=m.modelName;predictForm.dataName='';predictDialogVisible.value=true}
-const handlePredict=async()=>{if(!predictForm.dataName){showMsg('请选择目标数据集','warning');return}predictLoading.value=true;try{const r=await api.value.post(`/api/models/${predictForm.modelId}/predict`,{dataName:predictForm.dataName});if(r.data.status==='success'){showMsg('推理任务已提交');predictDialogVisible.value=false;const logKey=`${predictForm.modelName}_predict_${predictForm.dataName}`;predictLogs.value[logKey]='';connectPredictLog(predictForm.modelId,predictForm.dataName,logKey);startInferenceStatusRefresh()}}catch(e){showMsg(e.response?.data?.message||'推理失败','error')}finally{predictLoading.value=false}}
+const showPredictDialog=m=>{predictForm.modelId=m.id;predictForm.modelName=m.modelName;predictForm.dataName='';predictForm.conf=0.05;predictDialogVisible.value=true}
+const handlePredict=async()=>{if(!predictForm.dataName){showMsg('请选择目标数据集','warning');return}predictLoading.value=true;try{const r=await api.value.post(`/api/models/${predictForm.modelId}/predict`,{dataName:predictForm.dataName,conf:predictForm.conf});if(r.data.status==='success'){showMsg('推理任务已提交');predictDialogVisible.value=false;const logKey=`${predictForm.modelName}_predict_${predictForm.dataName}`;predictLogs.value[logKey]='';connectPredictLog(predictForm.modelId,predictForm.dataName,logKey);startInferenceStatusRefresh()}}catch(e){showMsg(e.response?.data?.message||'推理失败','error')}finally{predictLoading.value=false}}
 const connectPredictLog=(modelId,dataName,logKey)=>{if(predictLogPollTimer)clearInterval(predictLogPollTimer);const loadOnce=async()=>{try{const r=await api.value.get(`/api/models/${modelId}/predict-log`,{params:{dataName}});if(r.data.log){predictLogs.value[logKey]=r.data.log;autoScroll(logKey,'predict')}}catch(e){}};loadOnce();predictLogPollTimer=setInterval(loadOnce,5000);setTimeout(()=>{if(predictLogPollTimer){clearInterval(predictLogPollTimer);predictLogPollTimer=null}},600000)}
 const startInferenceStatusRefresh=()=>{if(inferenceStatusTimer)return;inferenceStatusTimer=setInterval(async()=>{await checkInferenceStatusChanges();if(!inferenceList.value.some(i=>i.status==='running')&&Object.keys(predictLogs.value).length===0){stopInferenceStatusRefresh()}},3000)}
 const stopInferenceStatusRefresh=()=>{if(inferenceStatusTimer){clearInterval(inferenceStatusTimer);inferenceStatusTimer=null}}
@@ -854,7 +854,7 @@ const openInferenceResultImage=path=>{window.open(getInferenceResultImageUrl(pat
 const getGridImageUrl=()=>getInferenceResultImageUrl('prediction_grid.jpg')
 const getAnnotatedImageUrl=path=>getInferenceResultImageUrl(path)
 const openAnnotatedImage=path=>{window.open(getAnnotatedImageUrl(path),'_blank')}
-const getAnnotatedDetections=fileName=>{const results=inferenceResultDetailData.value.detectionSummary?.perImageResults;if(!results)return null;const item=results.find(r=>r.originalName===fileName);return item?item.detections:0}
+const getAnnotatedDetections=imgPath=>{const results=inferenceResultDetailData.value.detectionSummary?.perImageResults;if(!results)return null;const relPath=imgPath.replace('annotated/','').replace(/\.[^.]+$/,'');const item=results.find(r=>{const rp=(r.relativePath||'').replace(/\.[^.]+$/,'');return rp===relPath});return item?item.detections:0}
 const handleDeleteInference=async inf=>{try{await api.value.delete(`/api/models/inferences/${inf.id}`);showMsg('推理记录已删除');loadInferenceRecords()}catch(e){showMsg(e.response?.data?.message||'删除失败','error')}}
 
 const setLogRef=(n,t,el)=>{if(el)logRefs.value[`${n}-${t}`]=el}

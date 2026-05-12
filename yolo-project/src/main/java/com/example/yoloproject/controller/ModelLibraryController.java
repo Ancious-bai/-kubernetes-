@@ -292,6 +292,16 @@ public class ModelLibraryController {
             return ResponseEntity.badRequest().body(response);
         }
 
+        double confThreshold = 0.05;
+        Object confObj = request.get("conf");
+        if (confObj != null) {
+            try {
+                confThreshold = Double.parseDouble(confObj.toString());
+                if (confThreshold < 0.01) confThreshold = 0.01;
+                if (confThreshold > 0.99) confThreshold = 0.99;
+            } catch (Exception ignored) {}
+        }
+
         try {
             Dataset dataset = datasetRepository.findByName(targetDataName).orElse(null);
             if (dataset == null || !Boolean.TRUE.equals(dataset.getPreprocessed())) {
@@ -364,7 +374,8 @@ public class ModelLibraryController {
                     "--model", modelPathRel,
                     "--source", targetDataName + "_processed",
                     "--name", predictDirName,
-                    "--imgsz", "640"
+                    "--imgsz", "640",
+                    "--conf", String.valueOf(confThreshold)
             );
             container.setCommand(command);
 
