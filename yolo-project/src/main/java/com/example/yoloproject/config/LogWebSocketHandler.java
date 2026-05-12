@@ -80,8 +80,14 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
             sendMessage(session, typeLabel + "状态: Running\nPod: " + podName + "\n开始获取实时日志...\n");
             startLogStream(session, recordName, type, podName);
         } else {
-            sendMessage(session, typeLabel + "状态: Running\nPod创建中，请稍候...\n");
-            scheduleRetry(session, recordName, type);
+            String discoveredPod = discoverPodByName(recordName, type);
+            if (discoveredPod != null) {
+                sendMessage(session, typeLabel + "状态: Running\nPod: " + discoveredPod + "\n开始获取实时日志...\n");
+                startLogStream(session, recordName, type, discoveredPod);
+            } else {
+                sendMessage(session, typeLabel + "状态: Running\nPod创建中，请稍候...\n");
+                scheduleRetry(session, recordName, type);
+            }
         }
     }
 
@@ -106,19 +112,49 @@ public class LogWebSocketHandler extends TextWebSocketHandler {
                 String podName = isTraining ? record.getTrainPodName() : record.getTestPodName();
                 String typeLabel = isTraining ? "训练" : "测试";
 
-                if ("RUNNING".equals(status) && podName != null && !podName.isEmpty()) {
-                    cancelRetry(logKey);
-                    sendMessage(session, typeLabel + "状态: Running\nPod: " + podName + "\n开始获取实时日志...\n");
-                    startLogStream(session, recordName, type, podName);
+                if ("RUNNING".equals(status)) {
+                    String effectivePod = podName;
+                    if ((effectivePod == null || effectivePod.isEmpty())) {
+                        effectivePod = discoverPodByName(recordName, type);
+                    }
+                    if (effectivePod != null && !effectivePod.isEmpty()) {
+                        cancelRetry(logKey);
+                        sendMessage(session, typeLabel + "状态: Running\nPod: " + effectivePod + "\n开始获取实时日志...\n");
+                        startLogStream(session, recordName, type, effectivePod);
+                    }
                 } else if ("COMPLETED".equals(status) || "FAILED".equals(status)) {
                     cancelRetry(logKey);
                     loadSavedLog(session, recordName, type);
                 }
             } catch (Exception e) {
-                cancelRetry(logKey);
+                log.warn("Schedule retry error: {}", e.getMessage());
             }
         }, 2, 2, TimeUnit.SECONDS);
         retryTasks.put(logKey, future);
+    }
+
+    private String discoverPodByName(String recordName, String type) {
+        try {
+            boolean isTraining = "train".equals(type);
+            String jobName = K8sClientService.sanitizeK8sName(
+                    recordName + "-" + type + "-job");
+            String actualPod = k8sClientService.getFirstPodNameByJob(jobName);
+            if (actualPod != null && !actualPod.isEmpty()) {
+                TrainingRecord record = trainingRecordRepository.findByRecordName(recordName).orElse(null);
+                if (record != null) {
+                    if (isTraining) {
+                        record.setTrainPodName(actualPod);
+                    } else {
+                        record.setTestPodName(actualPod);
+                    }
+                    trainingRecordRepository.save(record);
+                }
+                return actualPod;
+            }
+        } catch (Exception e) {
+            log.debug("Failed to discover pod for {}: {}", recordName, e.getMessage());
+        }
+        return null;
     }
 
     private void cancelRetry(String logKey) {
