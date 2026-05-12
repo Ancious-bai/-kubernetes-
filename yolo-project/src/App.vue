@@ -595,13 +595,45 @@
       <template #footer><el-button @click="predictDialogVisible=false">取消</el-button><el-button type="primary" @click="handlePredict" :loading="predictLoading">开始推理</el-button></template>
     </el-dialog>
 
-    <el-dialog title="推理结果" v-model="predictResultVisible" width="800px">
-      <div v-if="predictResultLoading" style="text-align:center;padding:30px"><el-icon class="is-loading" size="24"><Loading /></el-icon><p>推理中，请稍候...</p></div>
-      <div v-else-if="predictResultImages.length===0" style="text-align:center;padding:30px;color:#909399">暂无推理结果图片</div>
-      <div v-else style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;max-height:500px;overflow:auto">
-        <div v-for="img in predictResultImages" :key="img.name" style="border:1px solid #ebeef5;border-radius:6px;overflow:hidden">
-          <img :src="getPredictImageUrl(img.name)" style="width:100%;display:block;cursor:pointer" @click="openPredictImage(img.name)" />
-          <div style="padding:4px 8px;font-size:11px;color:#606266;text-overflow:ellipsis;overflow:hidden;white-space:nowrap">{{ img.name }}</div>
+    <el-dialog title="推理结果" v-model="predictResultVisible" width="900px" :close-on-click-modal="false">
+      <div style="display:flex;gap:8px;margin-bottom:14px">
+        <el-button size="small" :type="predictResultTab==='log'?'primary':'default'" @click="predictResultTab='log'">推理日志</el-button>
+        <el-button size="small" :type="predictResultTab==='result'?'primary':'default'" @click="predictResultTab='result';loadPredictResultDetail()">推理结果</el-button>
+      </div>
+      <div v-if="predictResultTab==='log'" style="border:1px solid #ebeef5;border-radius:6px;background:#fafafa;max-height:500px;overflow:auto">
+        <pre v-if="predictLogContent" style="margin:0;padding:12px;font-size:11px;white-space:pre-wrap;font-family:'Cascadia Code','Fira Code','Consolas',monospace;line-height:1.5;color:#303133">{{ predictLogContent }}</pre>
+        <div v-else style="text-align:center;padding:30px;color:#909399"><el-icon class="is-loading" size="20"><Loading /></el-icon><p style="margin-top:8px">加载日志中...</p></div>
+      </div>
+      <div v-else-if="predictResultTab==='result'">
+        <div v-if="predictResultDetailLoading" style="text-align:center;padding:30px"><el-icon class="is-loading" size="24"><Loading /></el-icon><p>加载中...</p></div>
+        <div v-else-if="!predictResultDetailData.exists" style="text-align:center;padding:30px;color:#909399">结果目录不存在</div>
+        <div v-else>
+          <div v-if="predictResultImages.length" style="margin-bottom:14px">
+            <h4 style="margin:0 0 8px;font-size:14px;color:#303133">推理图片 ({{ predictResultImages.length }})</h4>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;max-height:400px;overflow:auto">
+              <div v-for="img in predictResultImages" :key="img.path" style="border:1px solid #ebeef5;border-radius:6px;overflow:hidden;cursor:pointer" @click="openPredictImage(img.path)">
+                <img :src="getPredictImageUrl(img.path)" style="width:100%;height:140px;object-fit:cover;display:block" />
+                <div style="padding:4px 8px;font-size:11px;color:#606266;text-overflow:ellipsis;overflow:hidden;white-space:nowrap">{{ img.name }}</div>
+              </div>
+            </div>
+          </div>
+          <h4 style="margin:0 0 8px;font-size:14px;color:#303133">文件列表</h4>
+          <div style="max-height:300px;overflow:auto">
+            <table class="records-table" style="font-size:12px">
+              <thead><tr><th>文件名</th><th>路径</th><th>类型</th><th>大小</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr v-for="f in predictResultDetailData.files" :key="f.path">
+                  <td><span>{{ f.name }}</span></td>
+                  <td><span style="color:#909399;font-size:11px">{{ f.path }}</span></td>
+                  <td><el-tag v-if="f.isDirectory" size="small" type="info">目录</el-tag><el-tag v-else-if="f.isImage" size="small" type="success">图片</el-tag><el-tag v-else-if="f.isCsv" size="small" type="warning">CSV</el-tag><el-tag v-else-if="f.isText" size="small">文本</el-tag><el-tag v-else size="small" type="info">文件</el-tag></td>
+                  <td><span v-if="!f.isDirectory">{{ (f.size/1024).toFixed(1) }}KB</span></td>
+                  <td>
+                    <el-button v-if="f.isImage && !f.isDirectory" size="small" type="primary" @click="openPredictImage(f.path)">查看</el-button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
       <template #footer><el-button @click="predictResultVisible=false">关闭</el-button></template>
@@ -653,7 +685,7 @@ const modelList=ref([])
 const inferenceList=ref([])
 const inferenceFilter=reactive({modelName:'',dataName:''})
 const predictDialogVisible=ref(false),predictForm=reactive({modelId:null,modelName:'',dataName:''}),predictLoading=ref(false)
-const predictResultVisible=ref(false),predictResultLoading=ref(false),predictResultImages=ref([]),predictResultModelId=ref(null),predictResultDataName=ref('')
+const predictResultVisible=ref(false),predictResultTab=ref('log'),predictLogContent=ref(''),predictResultDetailData=ref({}),predictResultDetailLoading=ref(false),predictResultImages=ref([]),predictResultModelId=ref(null),predictResultDataName=ref('')
 const viewPredictImagesVisible=ref(false),viewPredictImagesList=ref([]),viewPredictImagesModelId=ref(null),viewPredictImagesDataName=ref('')
 const showDistributedTrainDialog=ref(false),distributedTrainForm=reactive({dataName:'',epochs:2,imgsz:640,targetNode:'',gpuType:'',gpuCount:1})
 const schedulableNodes=computed(()=>clusterNodes.value.filter(n=>n.ready&&n.schedulable))
@@ -813,10 +845,12 @@ const loadRunsFile=async(recordName,type,path)=>{try{const r=await api.value.get
 const switchToModels=()=>{activePage.value='models';loadModelList();loadInferenceRecords()}
 const loadModelList=async()=>{try{const r=await api.value.get('/api/models');modelList.value=r.data}catch(e){}}
 const showPredictDialog=m=>{predictForm.modelId=m.id;predictForm.modelName=m.modelName;predictForm.dataName='';predictDialogVisible.value=true}
-const handlePredict=async()=>{if(!predictForm.dataName){showMsg('请选择目标数据集','warning');return}predictLoading.value=true;try{const r=await api.value.post(`/api/models/${predictForm.modelId}/predict`,{dataName:predictForm.dataName});if(r.data.status==='success'){showMsg('推理任务已提交');predictDialogVisible.value=false;predictResultModelId.value=predictForm.modelId;predictResultDataName.value=predictForm.dataName;predictResultVisible.value=true;predictResultLoading.value=true;predictResultImages.value=[];pollPredictResults()}}catch(e){showMsg(e.response?.data?.message||'推理失败','error')}finally{predictLoading.value=false}}
-const pollPredictResults=async()=>{const iv=setInterval(async()=>{try{const r=await api.value.get(`/api/models/${predictResultModelId.value}/predict-results`,{params:{dataName:predictResultDataName.value}});if(r.data.exists){predictResultImages.value=r.data.images||[];predictResultLoading.value=false;clearInterval(iv)}}catch(e){}},3000);setTimeout(()=>{clearInterval(iv);predictResultLoading.value=false},60000)}
-const getPredictImageUrl=img=>{const p=img.path||img.name;return `/api/models/${predictResultModelId.value}/predict-image?dataName=${encodeURIComponent(predictResultDataName.value)}&imageName=${encodeURIComponent(img.name)}&path=${encodeURIComponent(p)}&token=${token.value}`}
-const openPredictImage=img=>{window.open(getPredictImageUrl(img),'_blank')}
+const handlePredict=async()=>{if(!predictForm.dataName){showMsg('请选择目标数据集','warning');return}predictLoading.value=true;try{const r=await api.value.post(`/api/models/${predictForm.modelId}/predict`,{dataName:predictForm.dataName});if(r.data.status==='success'){showMsg('推理任务已提交');predictDialogVisible.value=false;predictResultModelId.value=predictForm.modelId;predictResultDataName.value=predictForm.dataName;predictResultVisible.value=true;predictResultTab.value='log';predictLogContent.value='';predictResultDetailData.value={};predictResultImages.value=[];loadPredictLog();pollPredictLog()}}catch(e){showMsg(e.response?.data?.message||'推理失败','error')}finally{predictLoading.value=false}}
+const loadPredictLog=async()=>{try{const r=await api.value.get(`/api/models/${predictResultModelId.value}/predict-log`,{params:{dataName:predictResultDataName.value}});predictLogContent.value=r.data.log||'暂无日志'}catch(e){predictLogContent.value='加载日志失败'}}
+const pollPredictLog=async()=>{const iv=setInterval(loadPredictLog,5000);setTimeout(()=>clearInterval(iv),600000)}
+const loadPredictResultDetail=async()=>{if(Object.keys(predictResultDetailData.value).length)return;predictResultDetailLoading.value=true;try{const r=await api.value.get(`/api/models/${predictResultModelId.value}/predict-results`,{params:{dataName:predictResultDataName.value}});predictResultDetailData.value=r.data||{};predictResultImages.value=(r.data.files||[]).filter(f=>f.isImage&&!f.isDirectory)}catch(e){predictResultDetailData.value={exists:false}}finally{predictResultDetailLoading.value=false}}
+const getPredictImageUrl=path=>`/api/models/${predictResultModelId.value}/predict-image?dataName=${encodeURIComponent(predictResultDataName.value)}&imageName=&path=${encodeURIComponent(path)}&token=${token.value}`
+const openPredictImage=path=>{window.open(getPredictImageUrl(path),'_blank')}
 const handleDeleteModel=async m=>{try{await api.value.delete(`/api/models/${m.id}`);showMsg('模型已删除');loadModelList();loadInferenceRecords()}catch(e){showMsg(e.response?.data?.message||'删除失败','error')}}
 const loadInferenceRecords=async()=>{try{const params={};if(inferenceFilter.modelName)params.modelName=inferenceFilter.modelName;if(inferenceFilter.dataName)params.dataName=inferenceFilter.dataName;const r=await api.value.get('/api/models/inferences',{params});inferenceList.value=r.data}catch(e){}}
 const resetInferenceFilter=()=>{inferenceFilter.modelName='';inferenceFilter.dataName='';loadInferenceRecords()}

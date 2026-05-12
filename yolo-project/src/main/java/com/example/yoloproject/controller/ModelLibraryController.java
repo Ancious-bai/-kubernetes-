@@ -411,6 +411,7 @@ public class ModelLibraryController {
             jobSpec.setTemplate(template);
             k8sJob.setSpec(jobSpec);
 
+            try { k8sClientService.deleteJob(jobName); } catch (Exception ignored) {}
             k8sClientService.createJob(k8sJob);
 
             new Thread(() -> {
@@ -538,30 +539,74 @@ public class ModelLibraryController {
 
         response.put("exists", true);
         List<Map<String, Object>> images = new ArrayList<>();
-        collectImageFiles(dir, "", images);
+        List<Map<String, Object>> allFiles = new ArrayList<>();
+        collectResultFiles(dir, "", images, allFiles);
+
+        String resultsCsvContent = null;
+        File resultsCsvFile = new File(dir, "results.csv");
+        if (resultsCsvFile.exists()) {
+            try {
+                resultsCsvContent = String.join("\n", Files.readAllLines(resultsCsvFile.toPath()));
+            } catch (Exception ignored) {}
+        }
+
         response.put("images", images);
         response.put("count", images.size());
+        response.put("files", allFiles);
+        response.put("resultsCsv", resultsCsvContent);
         return ResponseEntity.ok(response);
     }
 
-    private void collectImageFiles(File dir, String prefix, List<Map<String, Object>> images) {
+    private void collectResultFiles(File dir, String prefix, List<Map<String, Object>> images, List<Map<String, Object>> allFiles) {
         File[] files = dir.listFiles();
         if (files == null) return;
         for (File f : files) {
             String path = prefix.isEmpty() ? f.getName() : prefix + "/" + f.getName();
+            Map<String, Object> fileInfo = new HashMap<>();
+            fileInfo.put("name", f.getName());
+            fileInfo.put("path", path);
+            fileInfo.put("isDirectory", f.isDirectory());
+            fileInfo.put("size", f.length());
+            String nameLower = f.getName().toLowerCase();
+            boolean isImage = nameLower.endsWith(".jpg") || nameLower.endsWith(".png") || nameLower.endsWith(".jpeg") || nameLower.endsWith(".bmp");
+            boolean isCsv = nameLower.endsWith(".csv");
+            boolean isText = nameLower.endsWith(".txt") || nameLower.endsWith(".yaml") || nameLower.endsWith(".yml");
+            fileInfo.put("isImage", isImage && !f.isDirectory());
+            fileInfo.put("isCsv", isCsv && !f.isDirectory());
+            fileInfo.put("isText", isText && !f.isDirectory());
+            allFiles.add(fileInfo);
+
             if (f.isDirectory()) {
-                collectImageFiles(f, path, images);
-            } else {
-                String name = f.getName().toLowerCase();
-                if (name.endsWith(".jpg") || name.endsWith(".png") || name.endsWith(".jpeg")) {
-                    Map<String, Object> info = new HashMap<>();
-                    info.put("name", f.getName());
-                    info.put("path", path);
-                    info.put("size", f.length());
-                    images.add(info);
-                }
+                collectResultFiles(f, path, images, allFiles);
+            } else if (isImage) {
+                images.add(new HashMap<>(fileInfo));
             }
         }
+    }
+
+    @GetMapping("/{id}/predict-log")
+    public ResponseEntity<Map<String, Object>> getPredictLog(
+            @PathVariable Long id,
+            @RequestParam String dataName,
+            HttpServletRequest httpRequest) {
+        Map<String, Object> response = new HashMap<>();
+
+        ModelLibrary model = modelLibraryRepository.findById(id).orElse(null);
+        if (model == null) {
+            response.put("log", "模型不存在");
+            return ResponseEntity.status(404).body(response);
+        }
+
+        String jobName = K8sClientService.sanitizeK8sName(model.getModelName() + "_predict_" + dataName + "-predict-job");
+        String jobLog = k8sClientService.getJobLogs(jobName);
+
+        InferenceRecord record = inferenceRecordRepository.findByModelIdAndDataName(id, dataName).orElse(null);
+        String status = record != null ? record.getStatus() : "unknown";
+
+        response.put("log", jobLog != null ? jobLog : "暂无日志（Job可能已清理或未启动）");
+        response.put("status", status);
+        response.put("jobName", jobName);
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/{id}/predict-image")
@@ -634,6 +679,15 @@ public class ModelLibraryController {
                 deleteDirectory(dir);
             }
         } catch (Exception ignored) {}
+
+        String jobName = K8sClientService.sanitizeK8sName(
+                record.getModelName() + "_predict_" + record.getDataName() + "-predict-job");
+        try {
+            k8sClientService.deleteJob(jobName);
+            log.info("Deleted K8s Job {} for inference record {}", jobName, id);
+        } catch (Exception e) {
+            log.warn("Failed to delete K8s Job {}: {}", jobName, e.getMessage());
+        }
 
         inferenceRecordRepository.deleteById(id);
 
