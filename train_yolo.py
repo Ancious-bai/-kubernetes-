@@ -1,21 +1,28 @@
 import os, shutil
 
-os.environ['YOLO_CONFIG_DIR'] = '/tmp/Ultralytics'
-os.environ['ULTRALYTICS_DISABLE_AUTOUPDATE'] = '1'
-
 YOLO_DIR = '/tmp/Ultralytics'
+os.environ['YOLO_CONFIG_DIR'] = YOLO_DIR
+os.environ['ULTRALYTICS_DISABLE_AUTOUPDATE'] = '1'
 os.makedirs(YOLO_DIR, exist_ok=True)
+
+SYSTEM_FONT_CANDIDATES = [
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+    '/usr/share/fonts/TTF/DejaVuSans.ttf',
+]
+
 FONT_PATH = os.path.join(YOLO_DIR, 'Arial.ttf')
 if not os.path.exists(FONT_PATH):
-    for src in ['/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-                '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-                '/usr/share/fonts/TTF/DejaVuSans.ttf']:
+    for src in SYSTEM_FONT_CANDIDATES:
         if os.path.exists(src):
             shutil.copy(src, FONT_PATH)
+            print(f"已复制系统字体 {src} -> {FONT_PATH}")
             break
     else:
         with open(FONT_PATH, 'w') as f:
             f.write('')
+        print(f"警告: 未找到系统字体，已创建空占位 {FONT_PATH}")
+
 
 from ultralytics import YOLO
 import argparse

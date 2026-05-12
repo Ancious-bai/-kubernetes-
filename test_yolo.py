@@ -9,7 +9,6 @@ SYSTEM_FONT_CANDIDATES = [
     '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
     '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
     '/usr/share/fonts/TTF/DejaVuSans.ttf',
-    '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
 ]
 
 FONT_PATH = os.path.join(YOLO_DIR, 'Arial.ttf')
