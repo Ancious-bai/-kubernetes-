@@ -277,6 +277,7 @@ public class ModelLibraryController {
         String username = (String) httpRequest.getAttribute("username");
         Map<String, Object> response = new HashMap<>();
 
+        try {
         ModelLibrary model = modelLibraryRepository.findById(id).orElse(null);
         if (model == null) {
             response.put("message", "模型不存在");
@@ -291,11 +292,15 @@ public class ModelLibraryController {
             return ResponseEntity.badRequest().body(response);
         }
 
-        Dataset dataset = datasetRepository.findByName(targetDataName).orElse(null);
-        if (dataset == null || !Boolean.TRUE.equals(dataset.getPreprocessed())) {
-            response.put("message", "该数据集未预处理，无法进行推理。请先对数据集进行预处理操作。");
-            response.put("status", "error");
-            return ResponseEntity.badRequest().body(response);
+        try {
+            Dataset dataset = datasetRepository.findByName(targetDataName).orElse(null);
+            if (dataset == null || !Boolean.TRUE.equals(dataset.getPreprocessed())) {
+                response.put("message", "该数据集未预处理，无法进行推理。请先对数据集进行预处理操作。");
+                response.put("status", "error");
+                return ResponseEntity.badRequest().body(response);
+            }
+        } catch (Exception e) {
+            log.warn("Dataset preprocessed check failed, skipping: {}", e.getMessage());
         }
 
         String projectRoot = yoloService.getProjectRoot();
@@ -464,6 +469,13 @@ public class ModelLibraryController {
         response.put("predictDir", predictDir);
         response.put("recordId", recordId);
         return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("Predict failed for model {}: {}", id, e.getMessage(), e);
+            response.put("message", "推理失败: " + e.getMessage());
+            response.put("status", "error");
+            return ResponseEntity.status(500).body(response);
+        }
     }
 
     private Map<String, Double> extractMetrics(String predictDir) {
