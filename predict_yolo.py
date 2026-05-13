@@ -25,13 +25,13 @@ if not os.path.exists(FONT_PATH):
 
 from ultralytics import YOLO
 import argparse
+import cv2
+import numpy as np
 
 
 def collect_all_images(source_dir):
-    extensions = ('*.jpg', '*.jpeg', '*.png', '*.bmp', '*.webp', '*.JPG', '*.JPEG', '*.PNG')
     results = []
-    for ext in extensions:
-        results.extend(glob.glob(os.path.join(source_dir, '**', ext), recursive=True))
+    results.extend(glob.glob(os.path.join(source_dir, '**', '*_rgb.png'), recursive=True))
     return sorted(set(results))
 
 
@@ -41,7 +41,7 @@ def main():
     parser.add_argument('--source', required=True)
     parser.add_argument('--name', default=None)
     parser.add_argument('--imgsz', type=int, default=640)
-    parser.add_argument('--conf', type=float, default=0.2)
+    parser.add_argument('--conf', type=float, default=0)
     args = parser.parse_args()
 
     data_root = os.environ.get('DATA_ROOT', '/app/data')
@@ -76,13 +76,26 @@ def main():
 
     print(f"正在预测 {len(all_images)} 个图像...")
 
-    model.predict(
+    results = model.predict(
         source=all_images,
         imgsz=args.imgsz,
         conf=args.conf,
-        save=True,
+        project=project_dir,
+        name=output_name,
+        save=False,
         verbose=True
     )
+
+    print(f"预测完成，正在保存结果...")
+    for i, result in enumerate(results):
+        src_path = all_images[i]
+        filename = os.path.basename(src_path)
+        predict_name = filename.replace('_rgb.png', '_predict.png')
+        predict_path = os.path.join(output_dir, predict_name)
+        
+        annotated_img = result.plot()
+        cv2.imwrite(predict_path, annotated_img)
+        print(f"已保存: {predict_path}")
 
 
 if __name__ == "__main__":
